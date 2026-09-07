@@ -29,7 +29,11 @@ function normalizeElement(element) {
   return { id: `${element.type}/${element.id}`, name, category, lat, lng, address: street ? `${street}${number ? `, ${number}` : ''}` : '', openingHours: cleanText(tags.opening_hours), brand: cleanText(tags.brand) };
 }
 
-export function createPoiService({ baseUrl = process.env.OVERPASS_BASE_URL || 'https://overpass-api.de/api/interpreter', userAgent = process.env.OVERPASS_USER_AGENT || process.env.GEOCODER_USER_AGENT || 'MapParty/1.0 (local-development)', fetchImpl = fetch, cache = new TtlLruCache({ ttlMs: 300_000, maxEntries: 100 }), timeoutMs = 10_000 } = {}) {
+export function createPoiService({ baseUrl = process.env.OVERPASS_BASE_URL || 'https://overpass-api.de/api/interpreter', userAgent = process.env.OVERPASS_USER_AGENT || process.env.GEOCODER_USER_AGENT || 'MapParty/1.0 (local-development)', fetchImpl = fetch, cache = new TtlLruCache({ ttlMs: 300_000, maxEntries: 100 }), timeoutMs = 4_000 } = {}) {
+  const providers = [...new Set([
+    baseUrl,
+    ...(process.env.OVERPASS_FALLBACK_URLS || 'https://overpass.kumi.systems/api/interpreter').split(',').map((value) => value.trim()).filter(Boolean)
+  ])];
   return {
     async search(request) {
       const normalized = normalizePoiRequest(request);
@@ -42,7 +46,15 @@ export function createPoiService({ baseUrl = process.env.OVERPASS_BASE_URL || 'h
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetchImpl(baseUrl, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': userAgent }, body: new URLSearchParams({ data: query }), signal: controller.signal });
+        let response;
+        for (const provider of providers) {
+          try {
+            response = await fetchImpl(provider, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': userAgent }, body: new URLSearchParams({ data: query }), signal: controller.signal });
+            if (response.ok) break;
+          } catch (providerError) {
+            if (provider === providers.at(-1)) throw providerError;
+          }
+        }
         if (!response.ok) throw Object.assign(new Error('Overpass provider error'), { code: 'PROVIDER_ERROR' });
         const payload = await response.json();
         if (!Array.isArray(payload?.elements)) throw Object.assign(new Error('Invalid Overpass response'), { code: 'PROVIDER_ERROR' });

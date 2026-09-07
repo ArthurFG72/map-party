@@ -7,6 +7,12 @@ export function poiRouter(service, rateLimit) {
     catch (error) {
       if (error.code === 'INVALID_POI_REQUEST') return res.status(400).json({ error: { code: error.code, message: 'Informe bbox válido e categorias restaurant ou fuel.' } });
       const timeout = error.code === 'PROVIDER_TIMEOUT';
+      // POIs sao complementares ao mapa; preserve a party quando o Overpass falhar.
+      return res.json({
+        results: [],
+        warning: timeout ? 'Pontos de interesse demoraram para responder.' : 'Pontos de interesse temporariamente indisponiveis.',
+        attribution: 'Dados OpenStreetMap (Overpass)'
+      });
       return res.status(timeout ? 504 : 502).json({ error: { code: timeout ? error.code : 'PROVIDER_ERROR', message: timeout ? 'O serviço de pontos de interesse excedeu o tempo limite.' : 'O serviço de pontos de interesse está indisponível.' } });
     }
   });
