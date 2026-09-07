@@ -28,6 +28,8 @@ test('participantes entram, recebem localização e sala vazia é removida', asy
   const ana = await server.connect(); const bia = await server.connect(); clients.push(ana, bia);
   const joinedAna = await emitAck(ana, 'join-party', { roomId: 'grupo-1', name: 'Ana' });
   assert.equal(joinedAna.ok, true);
+  assert.equal(joinedAna.contractVersion, 1);
+  assert.equal(joinedAna.snapshot.contractVersion, 1);
   const snapshotPromise = once(ana, 'participants-snapshot');
   const joinedBia = await emitAck(bia, 'join-party', { roomId: 'grupo-1', name: 'Bia' });
   assert.equal(joinedBia.snapshot.participants.length, 2);
@@ -38,6 +40,8 @@ test('participantes entram, recebem localização e sala vazia é removida', asy
   const locationEvent = await locationPromise;
   assert.equal(locationAck.ok, true);
   assert.equal(locationEvent.participantId, ana.id, 'servidor ignora socketId informado pelo cliente');
+  assert.equal(locationEvent.contractVersion, 1);
+  assert.equal(typeof locationEvent.location.serverReceivedAt, 'number');
 
   const afterDisconnect = once(ana, 'participants-snapshot');
   bia.disconnect();
@@ -118,4 +122,56 @@ test('aplica capacidade da sala e rate limit de localização por socket', async
   const limited = await emitAck(first, 'send-location', { lat: 0, lng: 0, accuracy: 1 });
   assert.equal(limited.ok, false);
   assert.match(limited.error, /Muitas atualizações/);
+});
+
+test('contrato versionado deduplica localização e comando de rota e protege revisão', async (t) => {
+  const server = await startServer();
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+
+  const unsupported = await emitAck(client, 'join-party', { contractVersion: 99, roomId: 'contrato-1', name: 'Gabi' });
+  assert.equal(unsupported.ok, false);
+  assert.equal(unsupported.code, 'UNSUPPORTED_CONTRACT_VERSION');
+  assert.equal((await emitAck(client, 'join-party', { contractVersion: 1, roomId: 'contrato-1', name: 'Gabi' })).ok, true);
+
+  const firstLocation = await emitAck(client, 'send-location', {
+    contractVersion: 1, locationSequence: 7, lat: -23.5, lng: -46.6, accuracy: 5
+  });
+  assert.equal(firstLocation.ok, true);
+  assert.equal(firstLocation.locationSequence, 7);
+  const duplicateLocation = await emitAck(client, 'send-location', {
+    contractVersion: 1, locationSequence: 7, lat: -23.7, lng: -46.8, accuracy: 5
+  });
+  assert.equal(duplicateLocation.duplicate, true);
+  assert.equal(server.store.snapshot('contrato-1').participants[0].location.lat, -23.5);
+
+  const route = {
+    contractVersion: 1,
+    commandId: 'route_command_456',
+    routeRevision: 0,
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 },
+    geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] },
+    distance: 1500,
+    duration: 300
+  };
+  const firstRoute = await emitAck(client, 'update-route', route);
+  assert.equal(firstRoute.ok, true);
+  assert.equal(firstRoute.route.revision, 1);
+  assert.equal(firstRoute.route.commandId, route.commandId);
+
+  const duplicateRoute = await emitAck(client, 'update-route', { ...route, distance: 9999 });
+  assert.equal(duplicateRoute.ok, true);
+  assert.equal(duplicateRoute.duplicate, true);
+  assert.equal(duplicateRoute.route.distance, 1500);
+  assert.equal(server.store.snapshot('contrato-1').route.revision, 1);
+
+  const conflict = await emitAck(client, 'update-route', {
+    ...route,
+    commandId: 'route_command_789',
+    routeRevision: 0
+  });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.code, 'ROUTE_REVISION_CONFLICT');
+  assert.equal(conflict.currentRouteRevision, 1);
 });

@@ -1,4 +1,5 @@
 import { SERVER_URL } from './config';
+import { CONTRACT_VERSION } from './contracts';
 
 async function requestJson(path, options = {}) {
   const controller = new AbortController();
@@ -54,6 +55,6 @@ export function calculateRoute(origin, destination) {
   return requestJson('/api/route', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ origin, destination, profile: 'driving' })
+    body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, profile: 'driving' })
   });
 }

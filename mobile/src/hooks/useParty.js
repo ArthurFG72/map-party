@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { SERVER_URL } from '../config';
+import { CONTRACT_VERSION, createCommandId } from '../contracts';
 import { loadPartySnapshot, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
 
 const MAX_ESTIMATE_MS = 5 * 60 * 1000;
@@ -32,12 +33,15 @@ export function useParty(roomId, name) {
   }), []);
   const [connected, setConnected] = useState(false);
   const [joined, setJoined] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [participants, setParticipants] = useState([]);
   const [route, setRoute] = useState(null);
   const [error, setError] = useState('');
   const [clock, setClock] = useState(Date.now());
   const joinedRef = useRef(false);
   const participantIdRef = useRef(null);
+  const locationSequenceRef = useRef(Date.now());
+  const routeRevisionRef = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 5_000);
@@ -65,6 +69,7 @@ export function useParty(roomId, name) {
       const nextRoute = snapshot.route || null;
       setParticipants(nextParticipants);
       setRoute(nextRoute);
+      routeRevisionRef.current = nextRoute?.revision || 0;
       persistSnapshot(nextParticipants, nextRoute);
     }
     function flushPending() {
@@ -76,20 +81,44 @@ export function useParty(roomId, name) {
       });
     }
     function join() {
-      socket.timeout(5_000).emit('join-party', { roomId, name }, (timeoutError, reply) => {
+      socket.timeout(5_000).emit('join-party', { contractVersion: CONTRACT_VERSION, roomId, name }, (timeoutError, reply) => {
         if (!active) return;
-        if (timeoutError) return setError('O servidor não confirmou a entrada.');
-        if (!reply?.ok) return setError(reply?.error || 'Não foi possível entrar na party.');
+        if (timeoutError) {
+          setConnectionStatus('unavailable');
+          return setError('O servidor não confirmou a entrada.');
+        }
+        if (!reply?.ok) {
+          setConnectionStatus('join-error');
+          return setError(reply?.error || 'Não foi possível entrar na party.');
+        }
         participantIdRef.current = reply.participantId;
         joinedRef.current = true;
         applySnapshot(reply.snapshot);
         setJoined(true);
+        setConnectionStatus('online');
         setError('');
         flushPending();
       });
     }
-    function onConnect() { setConnected(true); joinedRef.current = false; setJoined(false); join(); }
-    function onDisconnect() { joinedRef.current = false; setConnected(false); setJoined(false); }
+    function onConnect() {
+      setConnected(true);
+      joinedRef.current = false;
+      setJoined(false);
+      setConnectionStatus('joining');
+      setError('');
+      join();
+    }
+    function onDisconnect() {
+      joinedRef.current = false;
+      setConnected(false);
+      setJoined(false);
+      setConnectionStatus('reconnecting');
+    }
+    function onConnectError() {
+      setConnectionStatus('unavailable');
+      setError(`Servidor indisponível em ${SERVER_URL}. Últimos dados mantidos offline.`);
+    }
+    function onReconnectAttempt() { setConnectionStatus('reconnecting'); }
     function onLocation({ participantId, location }) {
       setParticipants((current) => {
         const next = current.map((item) => item.id === participantId ? { ...item, location } : item);
@@ -98,33 +127,43 @@ export function useParty(roomId, name) {
       });
     }
     function onRoute(nextRoute) {
+      routeRevisionRef.current = nextRoute?.revision || 0;
       setRoute(nextRoute);
       savePartySnapshot(roomId, { participants, route: nextRoute });
     }
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-    socket.on('connect_error', () => setError(`Servidor indisponível em ${SERVER_URL}. Últimos dados mantidos offline.`));
+    socket.on('connect_error', onConnectError);
     socket.on('participants-snapshot', applySnapshot);
     socket.on('participant-location', onLocation);
     socket.on('route-updated', onRoute);
+    socket.io.on('reconnect_attempt', onReconnectAttempt);
+    setConnectionStatus('connecting');
     socket.connect();
     return () => {
       active = false;
       joinedRef.current = false;
+      socket.io.off('reconnect_attempt', onReconnectAttempt);
       socket.removeAllListeners();
       socket.disconnect();
     };
   }, [name, roomId, socket]);
 
   const sendLocation = useCallback((location) => {
+    locationSequenceRef.current = Math.max(locationSequenceRef.current + 1, Date.now());
+    const update = {
+      ...location,
+      contractVersion: CONTRACT_VERSION,
+      locationSequence: locationSequenceRef.current
+    };
     if (!socket.connected || !joinedRef.current) {
-      savePendingLocation(roomId, location);
+      savePendingLocation(roomId, update);
       if (participantIdRef.current) setParticipants((current) => current.map((item) => item.id === participantIdRef.current ? { ...item, location } : item));
       return;
     }
-    socket.timeout(5_000).emit('send-location', location, (timeoutError, reply) => {
+    socket.timeout(5_000).emit('send-location', update, (timeoutError, reply) => {
       if (timeoutError || !reply?.ok) {
-        savePendingLocation(roomId, location);
+        savePendingLocation(roomId, update);
         setError(reply?.error || 'Localização guardada; será sincronizada quando a conexão voltar.');
       }
     });
@@ -132,9 +171,18 @@ export function useParty(roomId, name) {
 
   const publishRoute = useCallback((nextRoute) => new Promise((resolve, reject) => {
     if (!socket.connected || !joinedRef.current) return reject(new Error('Sem conexão. A rota anterior permanece disponível e será recalculada quando a internet voltar.'));
-    socket.timeout(5_000).emit('update-route', nextRoute, (timeoutError, reply) => {
+    socket.timeout(5_000).emit('update-route', {
+      ...nextRoute,
+      contractVersion: CONTRACT_VERSION,
+      commandId: createCommandId(),
+      routeRevision: routeRevisionRef.current
+    }, (timeoutError, reply) => {
       if (timeoutError) return reject(new Error('O servidor não confirmou a rota.'));
-      return reply?.ok ? resolve(reply.route) : reject(new Error(reply?.error || 'Rota rejeitada.'));
+      if (reply?.ok) {
+        routeRevisionRef.current = reply.route?.revision || routeRevisionRef.current;
+        return resolve(reply.route);
+      }
+      return reject(new Error(reply?.error || 'Rota rejeitada.'));
     });
   }), [socket]);
 
@@ -144,5 +192,5 @@ export function useParty(roomId, name) {
   })), [participants, clock]);
   const offline = !connected && (participants.length > 0 || !!route);
 
-  return { connected, joined, offline, participants: displayParticipants, route, error, sendLocation, publishRoute };
+  return { connected, joined, connectionStatus, offline, participants: displayParticipants, route, error, sendLocation, publishRoute };
 }

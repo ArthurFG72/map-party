@@ -1,5 +1,6 @@
 const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
 export const MAX_ROOM_PARTICIPANTS = 50;
+export const MAX_PROCESSED_ROUTE_COMMANDS = 100;
 
 function colorFor(seed) {
   let hash = 0;
@@ -26,7 +27,14 @@ export class PartyStore {
     const target = this.rooms.get(roomId);
     if (target && target.participants.size >= this.maxRoomParticipants) return null;
     this.leave(socketId);
-    const room = this.rooms.get(roomId) ?? { participants: new Map(), route: null };
+    const room = this.rooms.get(roomId) ?? {
+      participants: new Map(),
+      route: null,
+      locationSequences: new Map(),
+      routeCommands: new Map()
+    };
+    room.locationSequences ??= new Map();
+    room.routeCommands ??= new Map();
     const participant = { id: socketId, name, color: colorFor(`${roomId}:${name}`), location: null };
     room.participants.set(socketId, participant);
     this.rooms.set(roomId, room);
@@ -39,6 +47,7 @@ export class PartyStore {
     if (!roomId) return null;
     const room = this.rooms.get(roomId);
     room?.participants.delete(socketId);
+    room?.locationSequences?.delete(socketId);
     this.memberships.delete(socketId);
     if (room && room.participants.size === 0) this.rooms.delete(roomId);
     return roomId;
@@ -53,5 +62,32 @@ export class PartyStore {
     const room = this.rooms.get(roomId);
     if (!room) return null;
     return { roomId, participants: [...room.participants.values()], route: room.route };
+  }
+
+  locationSequence(socketId) {
+    const membership = this.roomFor(socketId);
+    return membership?.room.locationSequences?.get(socketId) ?? null;
+  }
+
+  setLocationSequence(socketId, sequence) {
+    const membership = this.roomFor(socketId);
+    if (!membership || sequence == null) return;
+    membership.room.locationSequences ??= new Map();
+    membership.room.locationSequences.set(socketId, sequence);
+  }
+
+  routeCommand(roomId, commandId) {
+    return commandId ? this.rooms.get(roomId)?.routeCommands?.get(commandId) ?? null : null;
+  }
+
+  rememberRouteCommand(roomId, commandId, route) {
+    if (!commandId) return;
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    room.routeCommands ??= new Map();
+    room.routeCommands.set(commandId, route);
+    while (room.routeCommands.size > MAX_PROCESSED_ROUTE_COMMANDS) {
+      room.routeCommands.delete(room.routeCommands.keys().next().value);
+    }
   }
 }

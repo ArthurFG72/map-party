@@ -55,6 +55,7 @@ test('serviço de rotas valida a solicitação e a resposta do provedor', async 
     }
   });
   await assert.rejects(() => service.calculate({ profile: 'walking' }), { code: 'INVALID_ROUTE' });
+  await assert.rejects(() => service.calculate({ contractVersion: 99, profile: 'driving' }), { code: 'INVALID_ROUTE' });
   const route = await service.calculate({
     profile: 'driving',
     origin: { lat: -23.5, lng: -46.6, label: 'Origem', source: 'search' },
@@ -62,6 +63,7 @@ test('serviço de rotas valida a solicitação e a resposta do provedor', async 
   });
   assert.equal(route.origin.label, 'Origem');
   assert.equal(route.distance, 1500);
+  assert.equal(route.contractVersion, 1);
 });
 
 test('POIs valida bbox, normaliza centros de ways e deduplica resultados', async () => {

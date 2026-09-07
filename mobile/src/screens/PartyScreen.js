@@ -12,6 +12,15 @@ const POI_CATEGORIES = [
   { id: 'fuel', label: 'Postos', icon: '⛽', color: '#1a73e8' }
 ];
 
+const CONNECTION_PRESENTATION = {
+  connecting: { label: 'CONECTANDO', message: 'Conectando à party…', color: '#f59e0b' },
+  joining: { label: 'ENTRANDO', message: 'Conexão estabelecida. Confirmando sua entrada…', color: '#f59e0b' },
+  online: { label: 'AO VIVO', message: '', color: '#b9f227' },
+  reconnecting: { label: 'RECONECTANDO', message: 'Conexão perdida. Tentando reconectar…', color: '#f59e0b' },
+  unavailable: { label: 'SEM CONEXÃO', message: 'Servidor indisponível. Continuaremos tentando.', color: '#f97316' },
+  'join-error': { label: 'NÃO ENTROU', message: 'Não foi possível entrar na party.', color: '#ef4444' }
+};
+
 function MapPin({ color, label }) {
   return <View style={[styles.pin, { backgroundColor: color }]}>
     <Text style={styles.pinText}>{label}</Text>
@@ -30,6 +39,19 @@ function formatDuration(seconds) {
 function formatAge(milliseconds) {
   const seconds = Math.max(1, Math.round(milliseconds / 1000));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}min`;
+}
+
+function searchResultDetails(result, currentLocation) {
+  const parts = String(result.label || '').split(',').map((part) => part.trim()).filter(Boolean);
+  const title = result.name || parts.shift() || 'Local sem nome';
+  const address = result.address || parts.join(', ') || 'Endereço não informado';
+  const distanceMeters = Number.isFinite(result.distanceMeters)
+    ? result.distanceMeters
+    : currentLocation ? distanceBetween(currentLocation, result) : null;
+  const distance = Number.isFinite(distanceMeters)
+    ? `${formatDistance(distanceMeters)} de você`
+    : 'Distância indisponível';
+  return { title, address, distance };
 }
 
 function distanceBetween(first, second) {
@@ -166,6 +188,7 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   async function search() {
+    if (!party.joined) return setMessage('Aguarde a conexão com a party para buscar lugares.');
     if (query.trim().length < 3) return setMessage('Digite pelo menos 3 caracteres.');
     setLoading(true);
     setMessage('Buscando…');
@@ -215,21 +238,28 @@ export default function PartyScreen({ session, onLeave }) {
 
   function usePoi(kind, poi) {
     setSelectedPoi(null);
-    setPoint(kind, { lat: poi.lat, lng: poi.lng, label: poi.name, source: 'poi' });
+    setPoint(kind, { lat: poi.lat, lng: poi.lng, label: poi.name, source: 'search' });
   }
 
   const routeCoordinates = party.route?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [];
+  const connection = party.offline
+    ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
+    : CONNECTION_PRESENTATION[party.connectionStatus] || CONNECTION_PRESENTATION.connecting;
 
   return <SafeAreaView style={styles.safe}>
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Text style={styles.title}>Map Party <Text style={styles.titleDot}>•</Text> <Text style={styles.liveText}>{party.offline ? 'OFFLINE' : party.joined ? 'AO VIVO' : 'CONECTANDO'}</Text></Text>
+        <Text style={styles.title}>Map Party <Text style={styles.titleDot}>•</Text> <Text style={[styles.liveText, { color: connection.color }]}>{connection.label}</Text></Text>
         <Text numberOfLines={1} style={styles.room}>{party.participants.length} participante{party.participants.length === 1 ? '' : 's'} · {session.roomId}</Text>
       </View>
-      <View style={[styles.statusDot, { backgroundColor: party.offline ? '#f59e0b' : party.joined ? '#b9f227' : '#f59e0b' }]} />
+      <View accessibilityLabel={`Estado da conexão: ${connection.label.toLocaleLowerCase('pt-BR')}`} style={[styles.statusDot, { backgroundColor: connection.color }]} />
       <Pressable accessibilityRole="button" accessibilityLabel="Compartilhar party" onPress={shareParty} style={styles.headerButton}><Text style={styles.headerButtonText}>Convidar</Text></Pressable>
       <Pressable onPress={onLeave} style={styles.leaveButton}><Text style={styles.leaveText}>Sair</Text></Pressable>
     </View>
+    {!!connection.message && <View accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.connectionBanner}>
+      <View style={[styles.connectionBannerDot, { backgroundColor: connection.color }]} />
+      <Text style={styles.connectionBannerText}>{connection.message}</Text>
+    </View>}
 
     <View style={styles.mapArea}>
       <MapView
@@ -297,14 +327,33 @@ export default function PartyScreen({ session, onLeave }) {
             onChangeText={setQuery}
             onSubmitEditing={search}
             placeholder={`Buscar ${activeKind === 'origin' ? 'origem' : 'destino'}`}
+            accessibilityLabel="Buscar lugar"
+            accessibilityHint="Digite ao menos três caracteres e toque em Buscar"
             returnKeyType="search"
             style={styles.floatingInput}
           />
-          {!!query && <Pressable onPress={() => { setQuery(''); setResults([]); }}><Text style={styles.clearSearch}>×</Text></Pressable>}
-          <Pressable disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
+          {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>×</Text></Pressable>}
+          <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
         </View>
         {results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="handled">
-          {results.map((result) => <Pressable key={result.id} onPress={() => setPoint(activeKind, { lat: result.lat, lng: result.lng, label: result.label, source: 'search' })} style={styles.result}><Text numberOfLines={2} style={styles.resultText}>{result.label}</Text></Pressable>)}
+          <Text accessibilityLiveRegion="polite" style={styles.resultsCount}>{results.length} resultado{results.length === 1 ? '' : 's'}</Text>
+          {results.map((result) => {
+            const details = searchResultDetails(result, location.position);
+            const point = { lat: result.lat, lng: result.lng, label: result.label, source: 'search' };
+            return <View key={result.id} style={styles.resultCard}>
+              <Text accessibilityRole="header" numberOfLines={1} style={styles.resultTitle}>{details.title}</Text>
+              <Text numberOfLines={2} style={styles.resultAddress}>{details.address}</Text>
+              <Text style={styles.resultDistance}>{details.distance}</Text>
+              <View style={styles.resultActions}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como origem`} onPress={() => setPoint('origin', point)} style={({ pressed }) => [styles.resultOriginButton, pressed && styles.pressed]}>
+                  <Text style={styles.resultOriginText}>Usar como origem</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como destino`} onPress={() => setPoint('destination', point)} style={({ pressed }) => [styles.resultDestinationButton, pressed && styles.pressed]}>
+                  <Text style={styles.resultDestinationText}>Usar como destino</Text>
+                </Pressable>
+              </View>
+            </View>;
+          })}
         </ScrollView>}
         {!navigationActive && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
           {POI_CATEGORIES.map((category) => {
@@ -345,7 +394,7 @@ export default function PartyScreen({ session, onLeave }) {
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
         {party.route && !navigationActive && <Pressable onPress={startNavigation} style={styles.startNavigation}><Text style={styles.startNavigationText}>Iniciar rota</Text></Pressable>}
-        <Text numberOfLines={2} style={[styles.message, (party.error || message || party.offline) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : location.status)}</Text>
+        <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : location.status)}</Text>
         <Text onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright')} style={styles.attribution}>Busca: © contribuidores OpenStreetMap · rotas: OSRM</Text>
       </View>
     </KeyboardAvoidingView>
@@ -360,6 +409,8 @@ const styles = StyleSheet.create({
   headerButton: { minHeight: 38, paddingHorizontal: 11, borderRadius: 12, justifyContent: 'center', backgroundColor: '#1a73e8' },
   headerButtonText: { color: '#fff', fontSize: 12, fontWeight: '800' },
   leaveButton: { minHeight: 38, paddingHorizontal: 8, justifyContent: 'center' }, leaveText: { color: '#ff9b9b', fontSize: 12, fontWeight: '800' },
+  connectionBanner: { minHeight: 38, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#fff7ed', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#fed7aa', flexDirection: 'row', alignItems: 'center' },
+  connectionBannerDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 }, connectionBannerText: { flex: 1, color: '#9a3412', fontSize: 12, fontWeight: '700' },
   mapArea: { flex: 1 }, map: { flex: 1 },
   mapControls: { position: 'absolute', top: 12, left: 12, right: 12 },
   navigationCard: { position: 'absolute', top: 78, left: 12, right: 12, minHeight: 74, padding: 12, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: '#b9f227', backgroundColor: '#0b172a', flexDirection: 'row', alignItems: 'center', shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 7, zIndex: 5 },
@@ -367,8 +418,13 @@ const styles = StyleSheet.create({
   stopNavigation: { minHeight: 40, paddingHorizontal: 13, borderRadius: 11, backgroundColor: '#fff', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
   floatingSearch: { minHeight: 50, paddingHorizontal: 13, borderRadius: 25, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', shadowColor: '#0f172a', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   searchIcon: { color: '#475569', fontSize: 24, marginRight: 8 }, floatingInput: { flex: 1, height: 48, color: '#0f172a', fontSize: 15 },
-  clearSearch: { color: '#64748b', fontSize: 25, lineHeight: 28, paddingHorizontal: 8 }, floatingSearchButton: { color: '#1a73e8', fontSize: 13, fontWeight: '800', paddingVertical: 12 },
-  floatingResults: { maxHeight: 156, marginTop: 7, backgroundColor: '#fff', borderRadius: 14, shadowColor: '#0f172a', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 5 },
+  clearSearchButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, clearSearch: { color: '#64748b', fontSize: 25, lineHeight: 28 }, floatingSearchButton: { color: '#1a73e8', fontSize: 13, fontWeight: '800', paddingVertical: 12 },
+  floatingResults: { maxHeight: 310, marginTop: 7, backgroundColor: '#fff', borderRadius: 14, shadowColor: '#0f172a', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 5 },
+  resultsCount: { paddingHorizontal: 13, paddingTop: 10, paddingBottom: 4, color: '#64748b', fontSize: 11, fontWeight: '700' },
+  resultCard: { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1' }, resultTitle: { color: '#0f172a', fontSize: 15, fontWeight: '800' },
+  resultAddress: { marginTop: 3, color: '#475569', fontSize: 12, lineHeight: 17 }, resultDistance: { marginTop: 5, color: '#1d4ed8', fontSize: 11, fontWeight: '700' },
+  resultActions: { flexDirection: 'row', gap: 8, marginTop: 10 }, resultOriginButton: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, resultOriginText: { color: '#166534', fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  resultDestinationButton: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, resultDestinationText: { color: '#1e40af', fontSize: 11, fontWeight: '800', textAlign: 'center' },
   categoryList: { gap: 8, paddingTop: 9, paddingBottom: 4 }, categoryChip: { height: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0', shadowColor: '#0f172a', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   categoryChipActive: { backgroundColor: '#e8f0fe', borderColor: '#a8c7fa' }, categoryIcon: { fontSize: 15, marginRight: 5 }, categoryText: { color: '#334155', fontSize: 12, fontWeight: '700' }, categoryTextActive: { color: '#1557b0' },
   poiStatus: { maxWidth: 190, height: 36, paddingHorizontal: 11, borderRadius: 18, backgroundColor: 'rgba(15, 23, 42, 0.78)', justifyContent: 'center' }, poiStatusText: { color: '#fff', fontSize: 10 },

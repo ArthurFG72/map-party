@@ -1,3 +1,4 @@
+import { acceptsContractVersion, CONTRACT_VERSION } from '../contracts.js';
 import { cleanPoint, cleanRoute } from '../validation.js';
 
 export function createRouteService({
@@ -22,6 +23,7 @@ export function createRouteService({
         const body = await response.json();
         const candidate = body?.routes?.[0];
         const route = body?.code === 'Ok' && candidate ? cleanRoute({
+          contractVersion: CONTRACT_VERSION,
           origin,
           destination,
           geometry: candidate.geometry,
@@ -42,7 +44,7 @@ export function createRouteService({
 }
 
 function cleanRouteRequest(payload) {
-  if (payload?.profile !== 'driving') return null;
+  if (!acceptsContractVersion(payload) || payload?.profile !== 'driving') return null;
   const origin = cleanPoint(payload.origin);
   const destination = cleanPoint(payload.destination);
   return origin && destination ? { origin, destination } : null;

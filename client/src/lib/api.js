@@ -1,3 +1,5 @@
+import { CONTRACT_VERSION } from './contracts.js';
+
 const DEFAULT_SERVER_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL || DEFAULT_SERVER_URL).replace(/\/$/, '');
 
@@ -36,6 +38,6 @@ export function fetchRoute(origin, destination) {
   return requestJson('/api/route', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ origin, destination, profile: 'driving' })
+    body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, profile: 'driving' })
   });
 }
