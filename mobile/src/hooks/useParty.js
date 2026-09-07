@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { SERVER_URL } from '../config';
 import { CONTRACT_VERSION, createCommandId } from '../contracts';
 import { getOrCreateParticipantToken, loadPartySnapshot, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
+import { routeFromNavigationRerouted } from '../partyNavigation';
 
 const MAX_ESTIMATE_MS = 5 * 60 * 1000;
 const EARTH_RADIUS_METERS = 6_371_000;
@@ -36,11 +37,15 @@ export function useParty(roomId, name) {
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [participants, setParticipants] = useState([]);
   const [route, setRoute] = useState(null);
+  const [personalRoute, setPersonalRoute] = useState(null);
+  const [participantId, setParticipantId] = useState(null);
+  const [locationSharingEnabled, setLocationSharingEnabled] = useState(true);
   const [error, setError] = useState('');
   const [clock, setClock] = useState(Date.now());
   const joinedRef = useRef(false);
   const participantIdRef = useRef(null);
   const participantTokenRef = useRef(null);
+  const locationSharingEnabledRef = useRef(true);
   const locationSequenceRef = useRef(Date.now());
   const routeRevisionRef = useRef(0);
 
@@ -74,8 +79,13 @@ export function useParty(roomId, name) {
       persistSnapshot(nextParticipants, nextRoute);
     }
     function flushPending() {
+      if (!locationSharingEnabledRef.current) return;
       takePendingLocation(roomId).then((pending) => {
-        if (!pending || !socket.connected || !joinedRef.current) return;
+        if (!pending) return;
+        if (!socket.connected || !joinedRef.current || !locationSharingEnabledRef.current) {
+          savePendingLocation(roomId, pending);
+          return;
+        }
         socket.timeout(5_000).emit('send-location', pending, (timeoutError, reply) => {
           if (timeoutError || !reply?.ok) savePendingLocation(roomId, pending);
         });
@@ -98,6 +108,7 @@ export function useParty(roomId, name) {
           return setError(reply?.error || 'Não foi possível entrar na party.');
         }
         participantIdRef.current = reply.participantId;
+        setParticipantId(reply.participantId);
         joinedRef.current = true;
         applySnapshot(reply.snapshot);
         setJoined(true);
@@ -135,7 +146,12 @@ export function useParty(roomId, name) {
     function onRoute(nextRoute) {
       routeRevisionRef.current = nextRoute?.revision || 0;
       setRoute(nextRoute);
+      setPersonalRoute(null);
       savePartySnapshot(roomId, { participants, route: nextRoute });
+    }
+    function onNavigationRerouted(payload) {
+      const nextRoute = routeFromNavigationRerouted(payload, participantIdRef.current);
+      if (nextRoute) setPersonalRoute(nextRoute);
     }
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
@@ -143,6 +159,7 @@ export function useParty(roomId, name) {
     socket.on('participants-snapshot', applySnapshot);
     socket.on('participant-location', onLocation);
     socket.on('route-updated', onRoute);
+    socket.on('navigation-rerouted', onNavigationRerouted);
     socket.io.on('reconnect_attempt', onReconnectAttempt);
     setConnectionStatus('connecting');
     getOrCreateParticipantToken().then((participantToken) => {
@@ -164,6 +181,7 @@ export function useParty(roomId, name) {
   }, [name, roomId, socket]);
 
   const sendLocation = useCallback((location) => {
+    if (!locationSharingEnabledRef.current) return;
     locationSequenceRef.current = Math.max(locationSequenceRef.current + 1, Date.now());
     const update = {
       ...location,
@@ -183,11 +201,12 @@ export function useParty(roomId, name) {
     });
   }, [roomId, socket]);
 
-  const publishRoute = useCallback((nextRoute) => new Promise((resolve, reject) => {
+  const publishRoute = useCallback((nextRoute, scope = 'shared') => new Promise((resolve, reject) => {
     if (!socket.connected || !joinedRef.current) return reject(new Error('Sem conexão. A rota anterior permanece disponível e será recalculada quando a internet voltar.'));
     socket.timeout(5_000).emit('update-route', {
       ...nextRoute,
       contractVersion: CONTRACT_VERSION,
+      scope,
       commandId: createCommandId(),
       routeRevision: routeRevisionRef.current
     }, (timeoutError, reply) => {
@@ -200,11 +219,34 @@ export function useParty(roomId, name) {
     });
   }), [socket]);
 
+  const setLocationSharing = useCallback((enabled) => {
+    const nextEnabled = Boolean(enabled);
+    locationSharingEnabledRef.current = nextEnabled;
+    setLocationSharingEnabled(nextEnabled);
+  }, []);
+
+  const clearPersonalRoute = useCallback(() => setPersonalRoute(null), []);
+
   const displayParticipants = useMemo(() => participants.map((item) => ({
     ...item,
     location: projectLocation(item.location, clock)
   })), [participants, clock]);
   const offline = !connected && (participants.length > 0 || !!route);
 
-  return { connected, joined, connectionStatus, offline, participants: displayParticipants, route, error, sendLocation, publishRoute };
+  return {
+    connected,
+    joined,
+    connectionStatus,
+    offline,
+    participantId,
+    participants: displayParticipants,
+    route,
+    personalRoute,
+    locationSharingEnabled,
+    error,
+    sendLocation,
+    setLocationSharing,
+    clearPersonalRoute,
+    publishRoute
+  };
 }

@@ -10,7 +10,9 @@ import {
   cleanParticipantToken,
   cleanRoomId,
   cleanRoute,
+  cleanRouteIntent,
   cleanRouteRevision,
+  cleanRouteScope,
   cleanRouteUpdate,
   MAX_LOCATION_FUTURE_SKEW_MS,
   MAX_ROUTE_COORDINATES,
@@ -39,6 +41,9 @@ test('aceita contrato legado e valida metadados versionados', () => {
   assert.equal(cleanCommandId('curto'), null);
   assert.equal(cleanRouteRevision(0), 0);
   assert.equal(cleanRouteRevision(-1), null);
+  assert.equal(cleanRouteScope(undefined), 'shared');
+  assert.equal(cleanRouteScope('personal'), 'personal');
+  assert.equal(cleanRouteScope('private'), null);
   assert.equal(cleanLocationSequence(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
   assert.equal(cleanLocationSequence(1.5), null);
   assert.equal(cleanParticipantToken('participant_token_abcdefghijklmnopqrstuvwxyz_123456'), 'participant_token_abcdefghijklmnopqrstuvwxyz_123456');
@@ -92,11 +97,17 @@ test('normaliza steps e limita comandos e tamanho da rota versionada', () => {
     }]
   };
   const update = cleanRouteUpdate(base);
+  assert.equal(update.scope, 'shared');
   assert.equal(update.commandId, 'route_command_123');
   assert.equal(update.routeRevision, 0);
   assert.equal(update.route.origin.source, 'poi');
   assert.equal(update.route.legs[0].summary, 'Centro');
   assert.equal(update.route.legs[0].steps[0].maneuver.bearingAfter, 90);
+
+  assert.equal(cleanRouteUpdate({ ...base, scope: 'personal' }).scope, 'personal');
+  assert.equal(cleanRouteUpdate({ ...base, scope: 'private' }), null);
+  assert.equal(cleanRouteIntent({ ...base, geometry: undefined, legs: undefined, scope: 'personal' }).scope, 'personal');
+  assert.equal(cleanRouteIntent({ ...base, geometry: undefined, legs: undefined, scope: 'private' }), null);
 
   assert.equal(cleanRouteUpdate({ ...base, commandId: '../invalid' }), null);
   assert.equal(cleanRouteUpdate({ ...base, routeRevision: 1.5 }), null);

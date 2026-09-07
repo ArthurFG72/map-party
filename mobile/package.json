@@ -8,7 +8,7 @@
     "start": "expo start",
     "start:tunnel": "expo start --tunnel",
     "ios": "expo start --ios",
-    "test": "node --experimental-default-type=module --test test/navigationGuidance.test.js test/poiClustering.test.js",
+    "test": "node --experimental-default-type=module --test test/navigationGuidance.test.js test/partyNavigation.test.js test/poiClustering.test.js",
     "check": "expo export --platform ios --output-dir dist-ios"
   },
   "dependencies": {

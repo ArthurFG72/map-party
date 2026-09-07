@@ -89,6 +89,7 @@ test('rota sincroniza somente após join e payload válido', async (t) => {
   const eventPromise = once(client, 'route-updated');
   const routeAck = await emitAck(client, 'update-route', payload);
   assert.equal(routeAck.ok, true);
+  assert.equal(routeAck.scope, 'shared');
   assert.equal(routeAck.route.revision, 1);
   const publishedRoute = await eventPromise;
   assert.equal(publishedRoute.geometry.type, 'LineString');
@@ -333,4 +334,76 @@ test('rejeita participantToken inválido sem criar party', async (t) => {
   const result = await emitAck(client, 'join-party', { roomId: 'token-1', name: 'Lia', participantToken: 'curto' });
   assert.equal(result.ok, false);
   assert.equal(server.store.snapshot('token-1'), null);
+});
+
+test('personal reroute preserves shared route, returns ETA and notifies only its participant', async (t) => {
+  const server = await startServer();
+  const ana = await server.connect(); const bia = await server.connect();
+  t.after(async () => { ana.disconnect(); bia.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  const joinedAna = await emitAck(ana, 'join-party', { roomId: 'personal-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'personal-1', name: 'Bia' });
+
+  const shared = await emitAck(ana, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 }, destination: { lat: -23.6, lng: -46.7 }
+  });
+  const locationTimestamp = Date.now() - 1_000;
+  await emitAck(ana, 'send-location', {
+    contractVersion: 1, locationSequence: 1, lat: -23.51, lng: -46.61, accuracy: 5, timestamp: locationTimestamp
+  });
+
+  let otherReroutes = 0;
+  let sharedUpdates = 0;
+  bia.on('navigation-rerouted', () => { otherReroutes += 1; });
+  bia.on('route-updated', () => { sharedUpdates += 1; });
+  const eventPromise = once(ana, 'navigation-rerouted');
+  const personal = await emitAck(ana, 'update-route', {
+    contractVersion: 1,
+    scope: 'personal',
+    commandId: 'personal_route_123',
+    routeRevision: 0,
+    origin: { lat: -23.51, lng: -46.61 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  const event = await eventPromise;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(personal.ok, true);
+  assert.equal(personal.scope, 'personal');
+  assert.equal(personal.route.scope, 'personal');
+  assert.equal('revision' in personal.route, false);
+  assert.deepEqual(event.eta, personal.eta);
+  assert.equal(personal.eta.participantId, joinedAna.participantId);
+  assert.equal(personal.eta.distanceMeters, 1500);
+  assert.equal(personal.eta.durationSeconds, 300);
+  assert.equal(personal.eta.locationTimestamp, locationTimestamp);
+  assert.equal(personal.eta.estimatedArrivalAt, locationTimestamp + 300_000);
+  assert.equal(server.store.snapshot('personal-1').route.revision, shared.route.revision);
+  assert.equal(server.store.snapshot('personal-1').route.scope, 'shared');
+  assert.equal(otherReroutes, 0);
+  assert.equal(sharedUpdates, 0);
+
+  const duplicate = await emitAck(ana, 'update-route', {
+    contractVersion: 1,
+    scope: 'personal',
+    commandId: 'personal_route_123',
+    origin: { lat: 0, lng: 0 },
+    destination: { lat: 1, lng: 1 }
+  });
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.deepEqual(duplicate.eta, personal.eta);
+});
+
+test('personal reroute requires a location and invalid scope is rejected', async (t) => {
+  const server = await startServer();
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  await emitAck(client, 'join-party', { roomId: 'personal-2', name: 'Caio' });
+  const route = { origin: { lat: 1, lng: 2 }, destination: { lat: 3, lng: 4 } };
+
+  const missingLocation = await emitAck(client, 'update-route', { ...route, scope: 'personal' });
+  assert.equal(missingLocation.ok, false);
+  assert.equal(missingLocation.code, 'LOCATION_REQUIRED');
+  assert.equal((await emitAck(client, 'update-route', { ...route, scope: 'private' })).ok, false);
+  assert.equal(server.store.snapshot('personal-2').route, null);
 });

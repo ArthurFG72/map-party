@@ -6,6 +6,7 @@ import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
 import { buildNavigationGuidance } from '../navigationGuidance';
 import { loadFavoritePlaces, loadPartyPoints, loadRecentPlaces, placeStorageId, removeFavoritePlace, saveFavoritePlace, savePartyPoints, saveRecentPlace } from '../offlineStore';
+import { buildParticipantRouteStatus } from '../partyNavigation';
 import { clusterAccessibilityLabel, clusterPois } from '../poiClustering';
 
 const INITIAL_REGION = { latitude: -14.2, longitude: -51.9, latitudeDelta: 35, longitudeDelta: 35 };
@@ -41,6 +42,12 @@ function formatDuration(seconds) {
 function formatAge(milliseconds) {
   const seconds = Math.max(1, Math.round(milliseconds / 1000));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}min`;
+}
+
+function participantStatusText(status) {
+  const eta = Number.isFinite(status?.etaSeconds) ? `ETA ${formatDuration(status.etaSeconds)}` : 'ETA indisponível';
+  const update = Number.isFinite(status?.lastUpdateAgeMs) ? `atualizado há ${formatAge(status.lastUpdateAgeMs)}` : 'sem atualização';
+  return `${eta} · ${update}`;
 }
 
 function searchResultDetails(result, currentLocation) {
@@ -92,6 +99,15 @@ export default function PartyScreen({ session, onLeave }) {
   const didCenterUserRef = useRef(false);
   const offRouteReadingsRef = useRef(0);
   const categoryKey = activeCategories.join(',');
+  const navigationRoute = party.personalRoute || party.route;
+  const displayedRoute = navigationActive ? navigationRoute : party.route;
+  const participantStatuses = useMemo(() => new Map(party.participants.map((participant) => [
+    participant.id,
+    buildParticipantRouteStatus(
+      participant,
+      participant.id === party.participantId && party.personalRoute ? party.personalRoute : party.route
+    )
+  ])), [party.participantId, party.participants, party.personalRoute, party.route]);
 
   useEffect(() => {
     loadPartyPoints(session.roomId).then((cached) => {
@@ -161,8 +177,8 @@ export default function PartyScreen({ session, onLeave }) {
   }, [location.position, party.route]);
 
   useEffect(() => {
-    if (!navigationActive || !location.position || !party.route?.destination) return;
-    const nextGuidance = buildNavigationGuidance(party.route, location.position);
+    if (!navigationActive || !location.position || !navigationRoute?.destination) return;
+    const nextGuidance = buildNavigationGuidance(navigationRoute, location.position);
     if (!nextGuidance) return;
     offRouteReadingsRef.current = nextGuidance.offRoute ? offRouteReadingsRef.current + 1 : 0;
     setNavigationGuidance({
@@ -178,8 +194,9 @@ export default function PartyScreen({ session, onLeave }) {
     if (nextGuidance.arrived) {
       setMessage('Você chegou ao destino.');
       setNavigationActive(false);
+      party.clearPersonalRoute();
     }
-  }, [location.position, navigationActive, party.route]);
+  }, [location.position, navigationActive, navigationRoute, party.clearPersonalRoute]);
 
   async function setPoint(kind, point) {
     const next = { ...points, [kind]: point };
@@ -235,10 +252,10 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   function startNavigation() {
-    if (!party.route) return setMessage('Defina origem e destino primeiro.');
+    if (!navigationRoute) return setMessage('Defina origem e destino primeiro.');
     if (!location.position) return setMessage('Aguardando uma posição do GPS para iniciar.');
     offRouteReadingsRef.current = 0;
-    setNavigationGuidance(buildNavigationGuidance(party.route, location.position));
+    setNavigationGuidance(buildNavigationGuidance(navigationRoute, location.position));
     setNavigationActive(true);
     setMessage('Navegação iniciada. Siga a linha azul.');
     mapRef.current?.animateToRegion({ latitude: location.position.lat, longitude: location.position.lng, latitudeDelta: 0.018, longitudeDelta: 0.018 }, 500);
@@ -247,7 +264,15 @@ export default function PartyScreen({ session, onLeave }) {
   function stopNavigation() {
     setNavigationActive(false);
     offRouteReadingsRef.current = 0;
+    party.clearPersonalRoute();
     setMessage('Navegação pausada.');
+  }
+
+  function toggleLocationSharing() {
+    const nextEnabled = !party.locationSharingEnabled;
+    party.setLocationSharing(nextEnabled);
+    if (nextEnabled && location.position) party.sendLocation(location.position);
+    setMessage(nextEnabled ? 'Compartilhamento de localização retomado.' : 'Compartilhamento de localização pausado. O GPS continua disponível neste aparelho.');
   }
 
   async function recalculateRoute() {
@@ -264,7 +289,7 @@ export default function PartyScreen({ session, onLeave }) {
     setMessage('Recalculando rota…');
     try {
       const route = await calculateRoute(origin, destination);
-      await party.publishRoute(route);
+      await party.publishRoute(route, 'personal');
       const nextPoints = { origin, destination };
       setPoints(nextPoints);
       savePartyPoints(session.roomId, nextPoints);
@@ -320,7 +345,7 @@ export default function PartyScreen({ session, onLeave }) {
     );
   }
 
-  const routeCoordinates = party.route?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [];
+  const routeCoordinates = displayedRoute?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [];
   const clusteredPois = useMemo(() => clusterPois(pois, visibleRegion, {
     width: viewport.width,
     height: Math.max(1, viewport.height * 0.6)
@@ -399,21 +424,24 @@ export default function PartyScreen({ session, onLeave }) {
         {points.destination && <Marker coordinate={{ latitude: points.destination.lat, longitude: points.destination.lng }} anchor={{ x: 0.5, y: 1 }} title="Destino" description={points.destination.label}>
           <MapPin color="#dc2626" label="B" />
         </Marker>}
-        {party.participants.filter((item) => item.location).map((item) => <Marker
-          key={item.id}
-          coordinate={{ latitude: item.location.lat, longitude: item.location.lng }}
-          title={item.name}
-          description={item.location.estimated
-            ? `Posição estimada há ${formatAge(item.location.ageMs)}`
-            : `Precisão aproximada: ${Math.round(item.location.accuracy)} m`}
-        >
-          <View accessibilityLabel={`${item.name}, ${item.location.estimated ? `posição estimada há ${formatAge(item.location.ageMs)}` : `precisão aproximada de ${Math.round(item.location.accuracy)} metros`}`} style={[styles.personMarker, { backgroundColor: item.color, opacity: item.location.estimated ? 0.58 : 1 }]}>
-            <Text style={styles.personMarkerText}>{item.name.slice(0, 1).toUpperCase()}</Text>
-          </View>
-        </Marker>)}
+        {party.participants.filter((item) => item.location).map((item) => {
+          const statusText = participantStatusText(participantStatuses.get(item.id));
+          return <Marker
+            key={item.id}
+            coordinate={{ latitude: item.location.lat, longitude: item.location.lng }}
+            title={item.name}
+            description={`${statusText}${item.location.estimated ? ' · posição estimada' : ''}`}
+            accessibilityLabel={`${item.name}, ${statusText}${item.location.estimated ? ', posição estimada' : ''}`}
+          >
+            <View style={[styles.personMarker, { backgroundColor: item.color, opacity: item.location.estimated ? 0.58 : 1 }]}>
+              <Text style={styles.personMarkerText}>{item.name.slice(0, 1).toUpperCase()}</Text>
+            </View>
+          </Marker>;
+        })}
       </MapView>
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
         <View style={styles.navigationCardText}>
+          {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
           <Text style={styles.navigationEyebrow}>{navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
           <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
           <Text style={styles.navigationEta}>{navigationGuidance ? `${formatDistance(navigationGuidance.remainingMeters)} restantes · aprox. ${formatDuration(navigationGuidance.remainingSeconds)}` : 'Calculando progresso e chegada…'}</Text>
@@ -523,8 +551,22 @@ export default function PartyScreen({ session, onLeave }) {
         <View style={styles.panelHandle} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.people}>
           <Text style={styles.peopleCount}>{party.participants.length} participante{party.participants.length === 1 ? '' : 's'}</Text>
-          {party.participants.map((item) => <View key={item.id} style={styles.personChip}><View style={[styles.personDot, { backgroundColor: item.color }]} /><Text style={styles.personName}>{item.name}</Text></View>)}
+          {party.participants.map((item) => {
+            const statusText = participantStatusText(participantStatuses.get(item.id));
+            return <View key={item.id} accessibilityLabel={`${item.name}, ${statusText}`} style={styles.personChip}>
+              <View style={[styles.personDot, { backgroundColor: item.color }]} />
+              <View><Text style={styles.personName}>{item.name}</Text><Text style={styles.personMeta}>{statusText}</Text></View>
+            </View>;
+          })}
         </ScrollView>
+
+        <View style={styles.sharingRow}>
+          <View style={[styles.sharingDot, !party.locationSharingEnabled && styles.sharingDotPaused]} />
+          <Text style={styles.sharingText}>{party.locationSharingEnabled ? 'Sua localização está sendo compartilhada' : 'Compartilhamento de localização pausado'}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`${party.locationSharingEnabled ? 'Pausar' : 'Retomar'} compartilhamento de localização`} accessibilityState={{ checked: party.locationSharingEnabled }} onPress={toggleLocationSharing} style={({ pressed }) => [styles.sharingButton, !party.locationSharingEnabled && styles.sharingButtonResume, pressed && styles.pressed]}>
+            <Text style={[styles.sharingButtonText, !party.locationSharingEnabled && styles.sharingButtonTextResume]}>{party.locationSharingEnabled ? 'Pausar' : 'Retomar'}</Text>
+          </Pressable>
+        </View>
 
         {!navigationActive && <View style={styles.segment}>
           <Pressable onPress={() => setActiveKind('origin')} style={[styles.segmentButton, activeKind === 'origin' && styles.originActive]}><Text style={[styles.segmentText, activeKind === 'origin' && styles.activeText]}>Origem</Text></Pressable>
@@ -534,7 +576,7 @@ export default function PartyScreen({ session, onLeave }) {
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
         {party.route && !navigationActive && <Pressable onPress={startNavigation} style={styles.startNavigation}><Text style={styles.startNavigationText}>Iniciar rota</Text></Pressable>}
-        <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : location.status)}</Text>
+        <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline || !party.locationSharingEnabled) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexção. Posições antigas aparecem como estimadas.' : party.locationSharingEnabled ? location.status : 'Compartilhamento pausado; o GPS permanece disponível localmente.')}</Text>
         <Text onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright')} style={styles.attribution}>Busca: © contribuidores OpenStreetMap · rotas: OSRM</Text>
       </View>
     </KeyboardAvoidingView>
@@ -554,7 +596,7 @@ const styles = StyleSheet.create({
   mapArea: { flex: 1 }, map: { flex: 1 },
   mapControls: { position: 'absolute', top: 12, left: 12, right: 12 },
   navigationCard: { position: 'absolute', top: 78, left: 12, right: 12, minHeight: 104, padding: 12, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: '#b9f227', backgroundColor: '#0b172a', flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 7, zIndex: 5 },
-  navigationCardOffRoute: { borderLeftColor: '#fb7185' }, navigationCardText: { flex: 1 }, navigationEyebrow: { color: '#b9f227', fontSize: 10, fontWeight: '900', letterSpacing: 1 }, navigationInstruction: { color: '#fff', fontSize: 17, lineHeight: 21, fontWeight: '900', marginTop: 2 }, navigationEta: { color: '#a9b8ca', fontSize: 11, marginTop: 4 },
+  navigationCardOffRoute: { borderLeftColor: '#fb7185' }, navigationCardText: { flex: 1 }, personalRouteBadge: { alignSelf: 'flex-start', marginBottom: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, overflow: 'hidden', backgroundColor: '#dbeafe', color: '#1d4ed8', fontSize: 9, fontWeight: '900', letterSpacing: 0.8 }, navigationEyebrow: { color: '#b9f227', fontSize: 10, fontWeight: '900', letterSpacing: 1 }, navigationInstruction: { color: '#fff', fontSize: 17, lineHeight: 21, fontWeight: '900', marginTop: 2 }, navigationEta: { color: '#a9b8ca', fontSize: 11, marginTop: 4 },
   navigationProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' }, navigationProgressFill: { height: 4, borderRadius: 2, backgroundColor: '#b9f227' },
   navigationActions: { width: 96, alignItems: 'stretch', gap: 6 }, offRouteText: { color: '#fecdd3', fontSize: 9, lineHeight: 12, fontWeight: '800', textAlign: 'center' }, recalculateButton: { minHeight: 44, paddingHorizontal: 8, borderRadius: 11, backgroundColor: '#e11d48', alignItems: 'center', justifyContent: 'center' }, recalculateButtonText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   stopNavigation: { minHeight: 40, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
@@ -594,8 +636,11 @@ const styles = StyleSheet.create({
   panel: { backgroundColor: '#fff', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, borderTopLeftRadius: 25, borderTopRightRadius: 25, marginTop: -12, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   panelHandle: { alignSelf: 'center', width: 34, height: 4, borderRadius: 2, backgroundColor: '#dbe3ed', marginBottom: 8 },
   people: { alignItems: 'center', gap: 8, paddingBottom: 9 }, peopleCount: { color: '#475569', fontSize: 11, fontWeight: '700' },
-  personChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f1f5f9', borderRadius: 99, paddingHorizontal: 8, paddingVertical: 5 },
-  personDot: { width: 8, height: 8, borderRadius: 4, marginRight: 5 }, personName: { fontSize: 11, color: '#334155' },
+  personChip: { minHeight: 44, flexDirection: 'row', alignItems: 'center', backgroundColor: '#f1f5f9', borderRadius: 14, paddingHorizontal: 9, paddingVertical: 5 },
+  personDot: { width: 8, height: 8, borderRadius: 4, marginRight: 7 }, personName: { fontSize: 11, color: '#334155', fontWeight: '800' }, personMeta: { marginTop: 1, color: '#64748b', fontSize: 9 },
+  sharingRow: { minHeight: 46, marginBottom: 9, paddingLeft: 10, paddingRight: 4, borderRadius: 12, backgroundColor: '#f8fafc', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sharingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#16a34a' }, sharingDotPaused: { backgroundColor: '#f59e0b' }, sharingText: { flex: 1, color: '#475569', fontSize: 10, fontWeight: '700' },
+  sharingButton: { minWidth: 72, minHeight: 40, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }, sharingButtonResume: { backgroundColor: '#dcfce7' }, sharingButtonText: { color: '#b91c1c', fontSize: 11, fontWeight: '900' }, sharingButtonTextResume: { color: '#166534' },
   segment: { flexDirection: 'row', gap: 7, marginBottom: 9 }, segmentButton: { flex: 1, minHeight: 40, borderRadius: 10, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   originActive: { backgroundColor: '#16a34a' }, destinationActive: { backgroundColor: '#dc2626' }, segmentText: { color: '#334155', fontSize: 13, fontWeight: '700' }, activeText: { color: '#fff' },
   locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },

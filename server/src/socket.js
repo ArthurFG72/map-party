@@ -18,6 +18,16 @@ function allowed(timestamps, { windowMs, max }) {
   return true;
 }
 
+function personalEta(participantId, route, locationTimestamp) {
+  return {
+    participantId,
+    distanceMeters: route.distance,
+    durationSeconds: route.duration,
+    locationTimestamp,
+    estimatedArrivalAt: Math.round(locationTimestamp + route.duration * 1000)
+  };
+}
+
 export function registerSocketHandlers(io, store = new PartyStore(), {
   routeService = createRouteService(),
   disconnectGraceMs = 10_000
@@ -72,14 +82,22 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       const membership = store.roomFor(socket.id);
       const update = cleanRouteIntent(payload);
       if (!membership || !update) return reject(ack, 'Rota inválida ou participante fora da party.');
-      const { commandId, routeRevision } = update;
-      const processedRoute = store.routeCommand(membership.roomId, commandId);
-      if (processedRoute) {
-        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, route: processedRoute }));
+      const { commandId, routeRevision, scope } = update;
+      const participant = membership.room.participants.get(membership.participantId);
+      const locationTimestamp = participant?.location?.timestamp;
+      if (scope === 'personal' && !Number.isSafeInteger(locationTimestamp)) {
+        return reject(ack, 'Envie uma localização válida antes de recalcular sua navegação.', 'LOCATION_REQUIRED');
+      }
+      const commandKey = scope === 'personal' && commandId
+        ? `personal:${membership.participantId}:${commandId}`
+        : commandId;
+      const processed = store.routeCommand(membership.roomId, commandKey);
+      if (processed) {
+        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, ...processed }));
         return;
       }
       const currentRevision = membership.room.route?.revision || 0;
-      if (routeRevision != null && routeRevision !== currentRevision) {
+      if (scope === 'shared' && routeRevision != null && routeRevision !== currentRevision) {
         return reject(ack, 'A rota foi atualizada por outro participante.', 'ROUTE_REVISION_CONFLICT', {
           currentRouteRevision: currentRevision
         });
@@ -106,30 +124,40 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       if (!activeMembership || activeMembership.roomId !== membership.roomId) {
         return reject(ack, 'Participante fora da party.');
       }
-      const duplicateAfterCalculation = store.routeCommand(membership.roomId, commandId);
+      const duplicateAfterCalculation = store.routeCommand(membership.roomId, commandKey);
       if (duplicateAfterCalculation) {
-        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, route: duplicateAfterCalculation }));
+        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, ...duplicateAfterCalculation }));
         return;
       }
-      const activeRevision = membership.room.route?.revision || 0;
-      if (routeRevision != null && routeRevision !== activeRevision) {
+      const activeRevision = activeMembership.room.route?.revision || 0;
+      if (scope === 'shared' && routeRevision != null && routeRevision !== activeRevision) {
         return reject(ack, 'A rota foi atualizada por outro participante.', 'ROUTE_REVISION_CONFLICT', {
           currentRouteRevision: activeRevision
         });
       }
-      const participant = membership.room.participants.get(membership.participantId);
+      const activeParticipant = activeMembership.room.participants.get(activeMembership.participantId);
       const enrichedRoute = {
         ...route,
         contractVersion: CONTRACT_VERSION,
+        scope,
         updatedAt: Date.now(),
-        updatedBy: { participantId: membership.participantId, name: participant.name },
-        revision: activeRevision + 1,
+        updatedBy: { participantId: activeMembership.participantId, name: activeParticipant.name },
+        ...(scope === 'shared' ? { revision: activeRevision + 1 } : {}),
         ...(commandId ? { commandId } : {})
       };
-      membership.room.route = enrichedRoute;
-      store.rememberRouteCommand(membership.roomId, commandId, enrichedRoute);
-      io.to(membership.roomId).emit('route-updated', enrichedRoute);
-      if (typeof ack === 'function') ack(versioned({ ok: true, route: enrichedRoute }));
+      const result = {
+        scope,
+        route: enrichedRoute,
+        ...(scope === 'personal' ? { eta: personalEta(activeMembership.participantId, enrichedRoute, locationTimestamp) } : {})
+      };
+      store.rememberRouteCommand(activeMembership.roomId, commandKey, result);
+      if (scope === 'personal') {
+        socket.emit('navigation-rerouted', versioned(result));
+      } else {
+        activeMembership.room.route = enrichedRoute;
+        io.to(activeMembership.roomId).emit('route-updated', enrichedRoute);
+      }
+      if (typeof ack === 'function') ack(versioned({ ok: true, ...result }));
     });
 
     socket.on('disconnect', () => {

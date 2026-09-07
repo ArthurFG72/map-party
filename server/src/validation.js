@@ -56,6 +56,11 @@ export function cleanRouteRevision(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+export function cleanRouteScope(value) {
+  if (value == null) return 'shared';
+  return value === 'shared' || value === 'personal' ? value : null;
+}
+
 export function cleanLocationSequence(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -199,8 +204,9 @@ export function cleanRouteUpdate(value) {
   const route = cleanRoute(value);
   if (!route) return null;
   const metadata = cleanRouteCommandMetadata(value);
-  if (!metadata) return null;
-  return { contractVersion: CONTRACT_VERSION, route, ...metadata };
+  const scope = cleanRouteScope(value.scope);
+  if (!metadata || !scope) return null;
+  return { contractVersion: CONTRACT_VERSION, scope, route, ...metadata };
 }
 
 function cleanRouteCommandMetadata(value) {
@@ -217,12 +223,14 @@ export function cleanRouteIntent(value) {
   const origin = cleanPoint(value.origin);
   const destination = cleanPoint(value.destination);
   const metadata = cleanRouteCommandMetadata(value);
-  if (!origin || !destination || !metadata) return null;
+  const scope = cleanRouteScope(value.scope);
+  if (!origin || !destination || !metadata || !scope) return null;
   // Legacy clients still send the complete route. Validate that shape even
   // though the authoritative geometry and totals will come from OSRM.
   if (value.geometry != null && !cleanRoute(value)) return null;
   return {
     contractVersion: CONTRACT_VERSION,
+    scope,
     profile: 'driving',
     origin,
     destination,
