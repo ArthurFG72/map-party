@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Linking, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { KeyboardAvoidingView, Linking, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { calculateRoute, searchPlaces, searchPois } from '../api';
 import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
 import { buildNavigationGuidance } from '../navigationGuidance';
-import { loadPartyPoints, savePartyPoints } from '../offlineStore';
+import { loadFavoritePlaces, loadPartyPoints, loadRecentPlaces, placeStorageId, removeFavoritePlace, saveFavoritePlace, savePartyPoints, saveRecentPlace } from '../offlineStore';
+import { clusterAccessibilityLabel, clusterPois } from '../poiClustering';
 
 const INITIAL_REGION = { latitude: -14.2, longitude: -51.9, latitudeDelta: 35, longitudeDelta: 35 };
 const POI_CATEGORIES = [
@@ -66,12 +67,16 @@ function distanceBetween(first, second) {
 
 export default function PartyScreen({ session, onLeave }) {
   const mapRef = useRef(null);
+  const viewport = useWindowDimensions();
   const party = useParty(session.roomId, session.name);
   const location = useLocationSharing({ enabled: true, onLocation: party.sendLocation });
   const [points, setPoints] = useState({ origin: null, destination: null });
   const [activeKind, setActiveKind] = useState('origin');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [favorites, setFavorites] = useState([]);
+  const [recentPlaces, setRecentPlaces] = useState([]);
+  const [showSavedPlaces, setShowSavedPlaces] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [visibleRegion, setVisibleRegion] = useState(INITIAL_REGION);
@@ -93,6 +98,16 @@ export default function PartyScreen({ session, onLeave }) {
       if (cached) setPoints(cached);
     });
   }, [session.roomId]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([loadFavoritePlaces(), loadRecentPlaces()]).then(([savedFavorites, savedRecentPlaces]) => {
+      if (!active) return;
+      setFavorites(savedFavorites);
+      setRecentPlaces(savedRecentPlaces);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!party.route) return;
@@ -172,6 +187,10 @@ export default function PartyScreen({ session, onLeave }) {
     savePartyPoints(session.roomId, next);
     setResults([]);
     setQuery('');
+    setShowSavedPlaces(false);
+    if (point.source === 'search' || point.source === 'saved') {
+      saveRecentPlace(point).then(setRecentPlaces);
+    }
     setActiveKind(kind === 'origin' ? 'destination' : 'origin');
     mapRef.current?.animateToRegion({ latitude: point.lat, longitude: point.lng, latitudeDelta: 0.03, longitudeDelta: 0.03 }, 500);
     if (next.origin && next.destination) {
@@ -271,10 +290,43 @@ export default function PartyScreen({ session, onLeave }) {
 
   function usePoi(kind, poi) {
     setSelectedPoi(null);
-    setPoint(kind, { lat: poi.lat, lng: poi.lng, label: poi.name, source: 'search' });
+    setPoint(kind, {
+      id: poi.id,
+      name: poi.name,
+      address: poi.address,
+      category: poi.category,
+      lat: poi.lat,
+      lng: poi.lng,
+      label: poi.address ? `${poi.name}, ${poi.address}` : poi.name,
+      source: 'search'
+    });
+  }
+
+  async function toggleFavorite(place) {
+    const storageId = placeStorageId(place);
+    const alreadyFavorite = favorites.some((item) => item.storageId === storageId);
+    const next = alreadyFavorite
+      ? await removeFavoritePlace(storageId)
+      : await saveFavoritePlace(place);
+    setFavorites(next);
+    setMessage(alreadyFavorite ? 'Local removido dos favoritos.' : 'Local adicionado aos favoritos.');
+  }
+
+  function focusCluster(cluster) {
+    setSelectedPoi(null);
+    mapRef.current?.fitToCoordinates(
+      cluster.pois.map((poi) => ({ latitude: poi.lat, longitude: poi.lng })),
+      { edgePadding: { top: 90, right: 70, bottom: 90, left: 70 }, animated: true }
+    );
   }
 
   const routeCoordinates = party.route?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [];
+  const clusteredPois = useMemo(() => clusterPois(pois, visibleRegion, {
+    width: viewport.width,
+    height: Math.max(1, viewport.height * 0.6)
+  }), [pois, visibleRegion, viewport.height, viewport.width]);
+  const favoriteIds = useMemo(() => new Set(favorites.map((place) => place.storageId)), [favorites]);
+  const recentWithoutFavorites = useMemo(() => recentPlaces.filter((place) => !favoriteIds.has(place.storageId)), [favoriteIds, recentPlaces]);
   const progressPercent = Math.round((navigationGuidance?.progress || 0) * 100);
   const connection = party.offline
     ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
@@ -305,6 +357,7 @@ export default function PartyScreen({ session, onLeave }) {
         onRegionChangeComplete={setVisibleRegion}
         onPress={(event) => {
           setSelectedPoi(null);
+          setShowSavedPlaces(false);
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
           setPoint(activeKind, { lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
         }}
@@ -312,13 +365,27 @@ export default function PartyScreen({ session, onLeave }) {
         {routeCoordinates.length > 1 && <Polyline coordinates={routeCoordinates} strokeColor="#ffffff" strokeWidth={9} />}
         {routeCoordinates.length > 1 && <Polyline coordinates={routeCoordinates} strokeColor="#2563eb" strokeWidth={6} />}
 
-        {pois.map((poi) => {
+        {clusteredPois.map((marker) => {
+          if (marker.type === 'cluster') return <Marker
+            key={marker.id}
+            coordinate={marker.coordinate}
+            accessibilityRole="button"
+            accessibilityLabel={clusterAccessibilityLabel(marker)}
+            stopPropagation
+            onPress={() => focusCluster(marker)}
+          >
+            <View style={styles.clusterMarker}><Text style={styles.clusterMarkerText}>{marker.count}</Text></View>
+          </Marker>;
+          const poi = marker.poi;
           const category = POI_CATEGORIES.find((item) => item.id === poi.category) || POI_CATEGORIES[0];
           return <Marker
-            key={poi.id}
+            key={marker.id}
             coordinate={{ latitude: poi.lat, longitude: poi.lng }}
             title={poi.name}
             description={poi.address || category.label}
+            accessibilityRole="button"
+            accessibilityLabel={`${poi.name}, ${poi.address || category.label}`}
+            accessibilityHint="Toque para abrir os detalhes do local"
             stopPropagation
             onPress={() => setSelectedPoi(poi)}
           >
@@ -370,6 +437,7 @@ export default function PartyScreen({ session, onLeave }) {
           <TextInput
             value={query}
             onChangeText={setQuery}
+            onFocus={() => setShowSavedPlaces(true)}
             onSubmitEditing={search}
             placeholder={`Buscar ${activeKind === 'origin' ? 'origem' : 'destino'}`}
             accessibilityLabel="Buscar lugar"
@@ -377,19 +445,23 @@ export default function PartyScreen({ session, onLeave }) {
             returnKeyType="search"
             style={styles.floatingInput}
           />
-          {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>×</Text></Pressable>}
+          {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); setShowSavedPlaces(true); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>×</Text></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
         </View>
-        {results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="handled">
+        {query.trim().length > 0 && results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="handled">
           <Text accessibilityLiveRegion="polite" style={styles.resultsCount}>{results.length} resultado{results.length === 1 ? '' : 's'}</Text>
           {results.map((result) => {
             const details = searchResultDetails(result, location.position);
-            const point = { lat: result.lat, lng: result.lng, label: result.label, source: 'search' };
+            const point = { ...result, name: details.title, address: details.address, lat: result.lat, lng: result.lng, label: result.label, source: 'search' };
+            const favorite = favoriteIds.has(placeStorageId(point));
             return <View key={result.id} style={styles.resultCard}>
               <Text accessibilityRole="header" numberOfLines={1} style={styles.resultTitle}>{details.title}</Text>
               <Text numberOfLines={2} style={styles.resultAddress}>{details.address}</Text>
               <Text style={styles.resultDistance}>{details.distance}</Text>
               <View style={styles.resultActions}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`${favorite ? 'Remover' : 'Adicionar'} ${details.title} ${favorite ? 'dos' : 'aos'} favoritos`} accessibilityState={{ selected: favorite }} onPress={() => toggleFavorite(point)} style={({ pressed }) => [styles.favoriteButton, favorite && styles.favoriteButtonActive, pressed && styles.pressed]}>
+                  <Text style={[styles.favoriteButtonText, favorite && styles.favoriteButtonTextActive]}>{favorite ? '★' : '☆'}</Text>
+                </Pressable>
                 <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como origem`} onPress={() => setPoint('origin', point)} style={({ pressed }) => [styles.resultOriginButton, pressed && styles.pressed]}>
                   <Text style={styles.resultOriginText}>Usar como origem</Text>
                 </Pressable>
@@ -397,6 +469,28 @@ export default function PartyScreen({ session, onLeave }) {
                   <Text style={styles.resultDestinationText}>Usar como destino</Text>
                 </Pressable>
               </View>
+            </View>;
+          })}
+        </ScrollView>}
+        {showSavedPlaces && !query.trim() && (favorites.length > 0 || recentWithoutFavorites.length > 0) && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="handled">
+          {favorites.length > 0 && <Text style={styles.resultsCount}>Favoritos</Text>}
+          {favorites.map((place) => {
+            const details = searchResultDetails(place, location.position);
+            return <View key={`favorite:${place.storageId}`} style={styles.savedPlaceRow}>
+              <View style={styles.savedPlaceText}><Text numberOfLines={1} style={styles.resultTitle}>{details.title}</Text><Text numberOfLines={1} style={styles.resultAddress}>{details.address} · {details.distance}</Text></View>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como origem`} onPress={() => setPoint('origin', { ...place, source: 'saved' })} style={styles.savedOriginButton}><Text style={styles.savedOriginText}>A</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como destino`} onPress={() => setPoint('destination', { ...place, source: 'saved' })} style={styles.savedDestinationButton}><Text style={styles.savedDestinationText}>B</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Remover ${details.title} dos favoritos`} onPress={() => toggleFavorite(place)} style={styles.savedFavoriteButton}><Text style={styles.savedFavoriteText}>★</Text></Pressable>
+            </View>;
+          })}
+          {recentWithoutFavorites.length > 0 && <Text style={styles.resultsCount}>Recentes</Text>}
+          {recentWithoutFavorites.map((place) => {
+            const details = searchResultDetails(place, location.position);
+            return <View key={`recent:${place.storageId}`} style={styles.savedPlaceRow}>
+              <View style={styles.savedPlaceText}><Text numberOfLines={1} style={styles.resultTitle}>{details.title}</Text><Text numberOfLines={1} style={styles.resultAddress}>{details.address} · {details.distance}</Text></View>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como origem`} onPress={() => setPoint('origin', { ...place, source: 'saved' })} style={styles.savedOriginButton}><Text style={styles.savedOriginText}>A</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${details.title} como destino`} onPress={() => setPoint('destination', { ...place, source: 'saved' })} style={styles.savedDestinationButton}><Text style={styles.savedDestinationText}>B</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Adicionar ${details.title} aos favoritos`} onPress={() => toggleFavorite(place)} style={styles.savedFavoriteButton}><Text style={styles.savedFavoriteText}>☆</Text></Pressable>
             </View>;
           })}
         </ScrollView>}
@@ -415,6 +509,7 @@ export default function PartyScreen({ session, onLeave }) {
           <Text numberOfLines={1} style={styles.poiName}>{selectedPoi.name}</Text>
           <Text numberOfLines={1} style={styles.poiAddress}>{selectedPoi.address || 'Local cadastrado no OpenStreetMap'}</Text>
         </View>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${favoriteIds.has(placeStorageId(selectedPoi)) ? 'Remover' : 'Adicionar'} ${selectedPoi.name} ${favoriteIds.has(placeStorageId(selectedPoi)) ? 'dos' : 'aos'} favoritos`} accessibilityState={{ selected: favoriteIds.has(placeStorageId(selectedPoi)) }} onPress={() => toggleFavorite({ ...selectedPoi, label: selectedPoi.address ? `${selectedPoi.name}, ${selectedPoi.address}` : selectedPoi.name, source: 'search' })} style={styles.poiFavoriteButton}><Text style={styles.poiFavoriteText}>{favoriteIds.has(placeStorageId(selectedPoi)) ? '★' : '☆'}</Text></Pressable>
         <Pressable onPress={() => usePoi('origin', selectedPoi)} style={styles.poiSecondaryButton}><Text style={styles.poiSecondaryText}>Origem</Text></Pressable>
         <Pressable onPress={() => usePoi('destination', selectedPoi)} style={styles.poiRouteButton}><Text style={styles.poiRouteText}>Rotas</Text></Pressable>
       </View>}
@@ -472,6 +567,13 @@ const styles = StyleSheet.create({
   resultAddress: { marginTop: 3, color: '#475569', fontSize: 12, lineHeight: 17 }, resultDistance: { marginTop: 5, color: '#1d4ed8', fontSize: 11, fontWeight: '700' },
   resultActions: { flexDirection: 'row', gap: 8, marginTop: 10 }, resultOriginButton: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, resultOriginText: { color: '#166534', fontSize: 11, fontWeight: '800', textAlign: 'center' },
   resultDestinationButton: { flex: 1, minHeight: 44, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 }, resultDestinationText: { color: '#1e40af', fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  favoriteButton: { width: 44, minHeight: 44, borderRadius: 10, borderWidth: 1, borderColor: '#cbd5e1', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  favoriteButtonActive: { borderColor: '#f59e0b', backgroundColor: '#fffbeb' }, favoriteButtonText: { color: '#64748b', fontSize: 22 }, favoriteButtonTextActive: { color: '#d97706' },
+  savedPlaceRow: { minHeight: 62, paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  savedPlaceText: { flex: 1, minWidth: 0 },
+  savedOriginButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center' }, savedOriginText: { color: '#166534', fontSize: 13, fontWeight: '900' },
+  savedDestinationButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, savedDestinationText: { color: '#1e40af', fontSize: 13, fontWeight: '900' },
+  savedFavoriteButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#fffbeb', alignItems: 'center', justifyContent: 'center' }, savedFavoriteText: { color: '#d97706', fontSize: 20 },
   categoryList: { gap: 8, paddingTop: 9, paddingBottom: 4 }, categoryChip: { height: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0', shadowColor: '#0f172a', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   categoryChipActive: { backgroundColor: '#e8f0fe', borderColor: '#a8c7fa' }, categoryIcon: { fontSize: 15, marginRight: 5 }, categoryText: { color: '#334155', fontSize: 12, fontWeight: '700' }, categoryTextActive: { color: '#1557b0' },
   poiStatus: { maxWidth: 190, height: 36, paddingHorizontal: 11, borderRadius: 18, backgroundColor: 'rgba(15, 23, 42, 0.78)', justifyContent: 'center' }, poiStatusText: { color: '#fff', fontSize: 10 },
@@ -481,9 +583,12 @@ const styles = StyleSheet.create({
   pinText: { color: '#fff', fontSize: 13, fontWeight: '900' },
   personMarker: { width: 30, height: 30, borderRadius: 15, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.25, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
   personMarkerText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  clusterMarker: { minWidth: 44, height: 44, paddingHorizontal: 9, borderRadius: 22, borderWidth: 3, borderColor: '#fff', backgroundColor: '#1d4ed8', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
+  clusterMarkerText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   poiMarker: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.22, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 }, poiMarkerIcon: { fontSize: 16 },
   poiCard: { position: 'absolute', left: 12, right: 12, bottom: 12, minHeight: 62, padding: 10, borderRadius: 14, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 7, shadowColor: '#0f172a', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   poiCardText: { flex: 1 }, poiName: { color: '#0f172a', fontSize: 13, fontWeight: '800' }, poiAddress: { marginTop: 3, color: '#64748b', fontSize: 10 },
+  poiFavoriteButton: { width: 44, height: 44, borderRadius: 11, backgroundColor: '#fffbeb', alignItems: 'center', justifyContent: 'center' }, poiFavoriteText: { color: '#d97706', fontSize: 20 },
   poiSecondaryButton: { height: 38, paddingHorizontal: 9, borderRadius: 10, backgroundColor: '#e2e8f0', justifyContent: 'center' }, poiSecondaryText: { color: '#334155', fontSize: 11, fontWeight: '700' },
   poiRouteButton: { height: 38, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#1a73e8', justifyContent: 'center' }, poiRouteText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   panel: { backgroundColor: '#fff', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, borderTopLeftRadius: 25, borderTopRightRadius: 25, marginTop: -12, borderTopWidth: 1, borderTopColor: '#e2e8f0' },

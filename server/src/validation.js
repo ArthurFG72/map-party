@@ -2,6 +2,7 @@ import { acceptsContractVersion, CONTRACT_VERSION } from './contracts.js';
 
 const ROOM_ID_RE = /^[a-z0-9-]{4,48}$/;
 const COMMAND_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const PARTICIPANT_TOKEN_RE = /^[A-Za-z0-9._~-]{32,256}$/;
 export const MAX_ROUTE_COORDINATES = 2000;
 export const MAX_ROUTE_LEGS = 8;
 export const MAX_ROUTE_STEPS = 500;
@@ -43,6 +44,12 @@ export function cleanCommandId(value) {
   if (typeof value !== 'string') return null;
   const commandId = value.trim();
   return COMMAND_ID_RE.test(commandId) ? commandId : null;
+}
+
+export function cleanParticipantToken(value) {
+  if (typeof value !== 'string') return null;
+  const token = value.trim();
+  return PARTICIPANT_TOKEN_RE.test(token) ? token : null;
 }
 
 export function cleanRouteRevision(value) {

@@ -27,7 +27,8 @@ function calculatedRoute({ origin, destination }) {
 
 async function startServer(options = {}) {
   const routeService = options.routeService || { calculate: async (request) => calculatedRoute(request) };
-  const instance = createApp({ origin: '*', ...options, routeService });
+  const disconnectGraceMs = options.disconnectGraceMs ?? 5;
+  const instance = createApp({ origin: '*', ...options, routeService, disconnectGraceMs });
   await new Promise((resolve) => instance.httpServer.listen(0, '127.0.0.1', resolve));
   const port = instance.httpServer.address().port;
   const connect = () => new Promise((resolve, reject) => {
@@ -251,4 +252,85 @@ test('contrato versionado deduplica localização e comando de rota e protege re
   assert.equal(conflict.ok, false);
   assert.equal(conflict.code, 'ROUTE_REVISION_CONFLICT');
   assert.equal(conflict.currentRouteRevision, 1);
+});
+
+test('participantToken mantém identidade, localização e rota após reconnect', async (t) => {
+  const participantToken = 'participant_token_abcdefghijklmnopqrstuvwxyz_123456';
+  const server = await startServer({ disconnectGraceMs: 80 });
+  const first = await server.connect();
+  let second;
+  t.after(async () => {
+    first.disconnect();
+    second?.disconnect();
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+
+  const firstJoin = await emitAck(first, 'join-party', { roomId: 'reconnect-1', name: 'Joana', participantToken });
+  assert.equal(firstJoin.ok, true);
+  assert.notEqual(firstJoin.participantId, first.id, 'identidade estável não depende do socket.id');
+  const repeatedJoin = await emitAck(first, 'join-party', { roomId: 'reconnect-1', name: 'Joana', participantToken });
+  assert.equal(repeatedJoin.participantId, firstJoin.participantId);
+  assert.equal(repeatedJoin.snapshot.participants.length, 1);
+  assert.equal((await emitAck(first, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 4 })).ok, true);
+  assert.equal((await emitAck(first, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 }, destination: { lat: -23.6, lng: -46.7 },
+    geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] },
+    distance: 999, duration: 999
+  })).ok, true);
+
+  first.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const retained = server.store.snapshot('reconnect-1');
+  assert.equal(retained.participants.length, 1);
+  assert.equal(retained.participants[0].online, false);
+
+  second = await server.connect();
+  const rejoined = await emitAck(second, 'join-party', { roomId: 'reconnect-1', name: 'Joana', participantToken });
+  assert.equal(rejoined.ok, true);
+  assert.equal(rejoined.participantId, firstJoin.participantId);
+  assert.equal(rejoined.snapshot.participants.length, 1);
+  assert.equal(rejoined.snapshot.participants[0].online, true);
+  assert.equal(rejoined.snapshot.participants[0].location.accuracy, 4);
+  assert.equal(rejoined.snapshot.route.distance, 1500);
+  assert.equal('participantToken' in rejoined.snapshot.participants[0], false);
+
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  assert.equal(server.store.snapshot('reconnect-1').participants.length, 1, 'timer antigo não remove participante reconectado');
+});
+
+test('party legada preserva snapshot durante grace period e expira depois', async (t) => {
+  const server = await startServer({ disconnectGraceMs: 60 });
+  const first = await server.connect();
+  let second;
+  t.after(async () => {
+    first.disconnect();
+    second?.disconnect();
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+  await emitAck(first, 'join-party', { roomId: 'snapshot-1', name: 'Kaio' });
+  await emitAck(first, 'update-route', {
+    origin: { lat: 1, lng: 2 }, destination: { lat: 3, lng: 4 },
+    geometry: { type: 'LineString', coordinates: [[2, 1], [4, 3]] },
+    distance: 1, duration: 1
+  });
+  first.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(server.store.snapshot('snapshot-1').route.distance, 1500);
+
+  second = await server.connect();
+  const recovered = await emitAck(second, 'join-party', { roomId: 'snapshot-1', name: 'Kaio' });
+  assert.equal(recovered.snapshot.route.distance, 1500);
+  assert.equal(recovered.snapshot.participants.length, 1);
+  second.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(server.store.snapshot('snapshot-1'), null);
+});
+
+test('rejeita participantToken inválido sem criar party', async (t) => {
+  const server = await startServer();
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  const result = await emitAck(client, 'join-party', { roomId: 'token-1', name: 'Lia', participantToken: 'curto' });
+  assert.equal(result.ok, false);
+  assert.equal(server.store.snapshot('token-1'), null);
 });

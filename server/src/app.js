@@ -15,6 +15,7 @@ import { createPoiService } from './services/poiService.js';
 export function createApp({
   origin = 'http://localhost:5173',
   maxRoomParticipants,
+  disconnectGraceMs = 10_000,
   geocodeService,
   routeService,
   poiService,
@@ -50,6 +51,9 @@ export function createApp({
     cors: { origin: corsOrigin, methods: ['GET', 'POST'] },
     maxHttpBufferSize: 128_000
   });
-  const store = registerSocketHandlers(io, new PartyStore({ maxRoomParticipants }), { routeService: resolvedRouteService });
+  const store = registerSocketHandlers(io, new PartyStore({ maxRoomParticipants }), {
+    routeService: resolvedRouteService,
+    disconnectGraceMs
+  });
   return { app, httpServer, io, store };
 }

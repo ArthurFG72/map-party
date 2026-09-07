@@ -7,6 +7,7 @@ import {
   cleanLocationSequence,
   cleanLocationUpdate,
   cleanName,
+  cleanParticipantToken,
   cleanRoomId,
   cleanRoute,
   cleanRouteRevision,
@@ -40,6 +41,9 @@ test('aceita contrato legado e valida metadados versionados', () => {
   assert.equal(cleanRouteRevision(-1), null);
   assert.equal(cleanLocationSequence(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
   assert.equal(cleanLocationSequence(1.5), null);
+  assert.equal(cleanParticipantToken('participant_token_abcdefghijklmnopqrstuvwxyz_123456'), 'participant_token_abcdefghijklmnopqrstuvwxyz_123456');
+  assert.equal(cleanParticipantToken('token-curto'), null);
+  assert.equal(cleanParticipantToken('x'.repeat(257)), null);
 
   const legacy = cleanLocationUpdate({ lat: 1, lng: 2, accuracy: 3 });
   assert.equal(legacy.contractVersion, CONTRACT_VERSION);

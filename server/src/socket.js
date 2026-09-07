@@ -1,5 +1,5 @@
 import { acceptsContractVersion, CONTRACT_VERSION, versioned } from './contracts.js';
-import { cleanLocationUpdate, cleanName, cleanRoomId, cleanRoute, cleanRouteIntent } from './validation.js';
+import { cleanLocationUpdate, cleanName, cleanParticipantToken, cleanRoomId, cleanRoute, cleanRouteIntent } from './validation.js';
 import { PartyStore } from './partyStore.js';
 import { createRouteService } from './services/routeService.js';
 
@@ -18,17 +18,24 @@ function allowed(timestamps, { windowMs, max }) {
   return true;
 }
 
-export function registerSocketHandlers(io, store = new PartyStore(), { routeService = createRouteService() } = {}) {
+export function registerSocketHandlers(io, store = new PartyStore(), {
+  routeService = createRouteService(),
+  disconnectGraceMs = 10_000
+} = {}) {
+  const graceMs = Number.isFinite(disconnectGraceMs) ? Math.max(0, Math.min(disconnectGraceMs, 60_000)) : 10_000;
   io.on('connection', (socket) => {
     const rate = { location: [], route: [] };
     socket.on('join-party', (payload, ack) => {
       if (!acceptsContractVersion(payload)) return reject(ack, 'Versão de contrato não suportada.', 'UNSUPPORTED_CONTRACT_VERSION');
       const roomId = cleanRoomId(payload?.roomId);
       const name = cleanName(payload?.name);
-      if (!roomId || !name) return reject(ack, 'Nome ou código da party inválido.');
+      const participantToken = payload?.participantToken == null ? null : cleanParticipantToken(payload.participantToken);
+      if (!roomId || !name || (payload?.participantToken != null && !participantToken)) {
+        return reject(ack, 'Nome, código da party ou token de participante inválido.');
+      }
 
       const previous = store.roomFor(socket.id)?.roomId ?? null;
-      const joined = store.join(socket.id, roomId, name);
+      const joined = store.join(socket.id, roomId, name, participantToken);
       if (!joined) return reject(ack, 'A party atingiu o limite de participantes.');
       if (previous && previous !== roomId) socket.leave(previous);
       socket.join(roomId);
@@ -53,10 +60,10 @@ export function registerSocketHandlers(io, store = new PartyStore(), { routeServ
       }
       const serverReceivedAt = Date.now();
       const location = { ...update.location, serverReceivedAt };
-      const participant = membership.room.participants.get(socket.id);
+      const participant = membership.room.participants.get(membership.participantId);
       participant.location = location;
       store.setLocationSequence(socket.id, locationSequence);
-      io.to(membership.roomId).emit('participant-location', versioned({ participantId: socket.id, location, locationSequence }));
+      io.to(membership.roomId).emit('participant-location', versioned({ participantId: membership.participantId, location, locationSequence }));
       if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence }));
     });
 
@@ -110,12 +117,12 @@ export function registerSocketHandlers(io, store = new PartyStore(), { routeServ
           currentRouteRevision: activeRevision
         });
       }
-      const participant = membership.room.participants.get(socket.id);
+      const participant = membership.room.participants.get(membership.participantId);
       const enrichedRoute = {
         ...route,
         contractVersion: CONTRACT_VERSION,
         updatedAt: Date.now(),
-        updatedBy: { participantId: socket.id, name: participant.name },
+        updatedBy: { participantId: membership.participantId, name: participant.name },
         revision: activeRevision + 1,
         ...(commandId ? { commandId } : {})
       };
@@ -126,8 +133,18 @@ export function registerSocketHandlers(io, store = new PartyStore(), { routeServ
     });
 
     socket.on('disconnect', () => {
-      const roomId = store.leave(socket.id);
-      if (roomId && store.rooms.has(roomId)) io.to(roomId).emit('participants-snapshot', versioned(store.snapshot(roomId)));
+      const disconnected = store.disconnect(socket.id);
+      if (!disconnected) return;
+      const { roomId, participantId, retained, participantRecoveryVersion, roomRecoveryVersion } = disconnected;
+      if (store.rooms.has(roomId)) io.to(roomId).emit('participants-snapshot', versioned(store.snapshot(roomId)));
+      const timer = setTimeout(() => {
+        const participantExpired = retained && store.expireParticipant(roomId, participantId, participantRecoveryVersion);
+        const roomExpired = store.expireRoom(roomId, roomRecoveryVersion);
+        if (participantExpired && !roomExpired && store.rooms.has(roomId)) {
+          io.to(roomId).emit('participants-snapshot', versioned(store.snapshot(roomId)));
+        }
+      }, graceMs);
+      timer.unref?.();
     });
   });
   return store;

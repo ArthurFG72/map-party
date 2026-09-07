@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { SERVER_URL } from '../config';
 import { CONTRACT_VERSION, createCommandId } from '../contracts';
-import { loadPartySnapshot, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
+import { getOrCreateParticipantToken, loadPartySnapshot, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
 
 const MAX_ESTIMATE_MS = 5 * 60 * 1000;
 const EARTH_RADIUS_METERS = 6_371_000;
@@ -40,6 +40,7 @@ export function useParty(roomId, name) {
   const [clock, setClock] = useState(Date.now());
   const joinedRef = useRef(false);
   const participantIdRef = useRef(null);
+  const participantTokenRef = useRef(null);
   const locationSequenceRef = useRef(Date.now());
   const routeRevisionRef = useRef(0);
 
@@ -81,7 +82,12 @@ export function useParty(roomId, name) {
       });
     }
     function join() {
-      socket.timeout(5_000).emit('join-party', { contractVersion: CONTRACT_VERSION, roomId, name }, (timeoutError, reply) => {
+      socket.timeout(5_000).emit('join-party', {
+        contractVersion: CONTRACT_VERSION,
+        roomId,
+        name,
+        participantToken: participantTokenRef.current
+      }, (timeoutError, reply) => {
         if (!active) return;
         if (timeoutError) {
           setConnectionStatus('unavailable');
@@ -139,7 +145,15 @@ export function useParty(roomId, name) {
     socket.on('route-updated', onRoute);
     socket.io.on('reconnect_attempt', onReconnectAttempt);
     setConnectionStatus('connecting');
-    socket.connect();
+    getOrCreateParticipantToken().then((participantToken) => {
+      if (!active) return;
+      participantTokenRef.current = participantToken;
+      socket.connect();
+    }).catch(() => {
+      if (!active) return;
+      setConnectionStatus('unavailable');
+      setError('Não foi possível preparar a identidade local.');
+    });
     return () => {
       active = false;
       joinedRef.current = false;
