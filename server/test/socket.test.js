@@ -3,8 +3,31 @@ import assert from 'node:assert/strict';
 import { io as createClient } from 'socket.io-client';
 import { createApp } from '../src/app.js';
 
-async function startServer() {
-  const instance = createApp({ origin: '*' });
+function calculatedRoute({ origin, destination }) {
+  return {
+    contractVersion: 1,
+    origin,
+    destination,
+    geometry: { type: 'LineString', coordinates: [[origin.lng, origin.lat], [destination.lng, destination.lat]] },
+    distance: 1500,
+    duration: 300,
+    legs: [{
+      distance: 1500,
+      duration: 300,
+      steps: [{
+        distance: 1500,
+        duration: 300,
+        name: 'Rota calculada',
+        mode: 'driving',
+        maneuver: { type: 'turn', modifier: 'right', location: [origin.lng, origin.lat] }
+      }]
+    }]
+  };
+}
+
+async function startServer(options = {}) {
+  const routeService = options.routeService || { calculate: async (request) => calculatedRoute(request) };
+  const instance = createApp({ origin: '*', ...options, routeService });
   await new Promise((resolve) => instance.httpServer.listen(0, '127.0.0.1', resolve));
   const port = instance.httpServer.address().port;
   const connect = () => new Promise((resolve, reject) => {
@@ -68,8 +91,62 @@ test('rota sincroniza somente após join e payload válido', async (t) => {
   assert.equal(routeAck.route.revision, 1);
   const publishedRoute = await eventPromise;
   assert.equal(publishedRoute.geometry.type, 'LineString');
+  assert.equal(publishedRoute.legs[0].steps[0].name, 'Rota calculada');
   assert.equal(publishedRoute.updatedBy.name, 'Caio');
   assert.equal((await emitAck(client, 'send-location', { lat: 200, lng: 0, accuracy: 1 })).ok, false);
+});
+
+test('servidor ignora rota enviada e publica cálculo autoritativo', async (t) => {
+  let receivedRequest;
+  const authoritative = calculatedRoute({
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  authoritative.distance = 321;
+  authoritative.duration = 45;
+  authoritative.legs[0].distance = 321;
+  authoritative.legs[0].duration = 45;
+  authoritative.legs[0].steps[0].distance = 321;
+  authoritative.legs[0].steps[0].duration = 45;
+  const server = await startServer({ routeService: { calculate: async (request) => {
+    receivedRequest = request;
+    return authoritative;
+  } } });
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  await emitAck(client, 'join-party', { roomId: 'autoridade-1', name: 'Helena' });
+
+  const result = await emitAck(client, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 },
+    geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+    distance: 999999,
+    duration: 999999
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.route.distance, 321);
+  assert.deepEqual(result.route.geometry.coordinates, authoritative.geometry.coordinates);
+  assert.equal(receivedRequest.profile, 'driving');
+  assert.deepEqual(receivedRequest.origin, { lat: -23.5, lng: -46.6 });
+});
+
+test('aceita intenção versionada sem geometria e reporta falha do OSRM', async (t) => {
+  const providerError = Object.assign(new Error('offline'), { code: 'PROVIDER_ERROR' });
+  const server = await startServer({ routeService: { calculate: async () => { throw providerError; } } });
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  await emitAck(client, 'join-party', { roomId: 'autoridade-2', name: 'Iara' });
+  const result = await emitAck(client, 'update-route', {
+    contractVersion: 1,
+    commandId: 'route_intent_123',
+    routeRevision: 0,
+    profile: 'driving',
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_ERROR');
+  assert.equal(server.store.snapshot('autoridade-2').route, null);
 });
 
 test('retry de join é idempotente e preserva localização e rota', async (t) => {

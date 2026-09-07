@@ -1,6 +1,7 @@
 import { acceptsContractVersion, CONTRACT_VERSION, versioned } from './contracts.js';
-import { cleanLocationUpdate, cleanName, cleanRoomId, cleanRouteUpdate } from './validation.js';
+import { cleanLocationUpdate, cleanName, cleanRoomId, cleanRoute, cleanRouteIntent } from './validation.js';
 import { PartyStore } from './partyStore.js';
+import { createRouteService } from './services/routeService.js';
 
 const LOCATION_RATE = { windowMs: 60_000, max: 30 };
 const ROUTE_RATE = { windowMs: 60_000, max: 10 };
@@ -17,7 +18,7 @@ function allowed(timestamps, { windowMs, max }) {
   return true;
 }
 
-export function registerSocketHandlers(io, store = new PartyStore()) {
+export function registerSocketHandlers(io, store = new PartyStore(), { routeService = createRouteService() } = {}) {
   io.on('connection', (socket) => {
     const rate = { location: [], route: [] };
     socket.on('join-party', (payload, ack) => {
@@ -59,12 +60,12 @@ export function registerSocketHandlers(io, store = new PartyStore()) {
       if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence }));
     });
 
-    socket.on('update-route', (payload, ack) => {
+    socket.on('update-route', async (payload, ack) => {
       if (!allowed(rate.route, ROUTE_RATE)) return reject(ack, 'Muitas atualizações de rota. Aguarde um momento.');
       const membership = store.roomFor(socket.id);
-      const update = cleanRouteUpdate(payload);
+      const update = cleanRouteIntent(payload);
       if (!membership || !update) return reject(ack, 'Rota inválida ou participante fora da party.');
-      const { commandId, routeRevision, route } = update;
+      const { commandId, routeRevision } = update;
       const processedRoute = store.routeCommand(membership.roomId, commandId);
       if (processedRoute) {
         if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, route: processedRoute }));
@@ -76,13 +77,46 @@ export function registerSocketHandlers(io, store = new PartyStore()) {
           currentRouteRevision: currentRevision
         });
       }
+      let route;
+      try {
+        const calculated = await routeService.calculate({
+          contractVersion: CONTRACT_VERSION,
+          profile: update.profile,
+          origin: update.origin,
+          destination: update.destination
+        });
+        route = cleanRoute(calculated);
+        if (!route) throw Object.assign(new Error('Invalid provider route'), { code: 'PROVIDER_ERROR' });
+      } catch (error) {
+        const timeout = error.code === 'PROVIDER_TIMEOUT';
+        return reject(
+          ack,
+          timeout ? 'O serviço de rotas excedeu o tempo limite.' : 'O serviço de rotas está indisponível.',
+          timeout ? 'PROVIDER_TIMEOUT' : 'PROVIDER_ERROR'
+        );
+      }
+      const activeMembership = store.roomFor(socket.id);
+      if (!activeMembership || activeMembership.roomId !== membership.roomId) {
+        return reject(ack, 'Participante fora da party.');
+      }
+      const duplicateAfterCalculation = store.routeCommand(membership.roomId, commandId);
+      if (duplicateAfterCalculation) {
+        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, route: duplicateAfterCalculation }));
+        return;
+      }
+      const activeRevision = membership.room.route?.revision || 0;
+      if (routeRevision != null && routeRevision !== activeRevision) {
+        return reject(ack, 'A rota foi atualizada por outro participante.', 'ROUTE_REVISION_CONFLICT', {
+          currentRouteRevision: activeRevision
+        });
+      }
       const participant = membership.room.participants.get(socket.id);
       const enrichedRoute = {
         ...route,
         contractVersion: CONTRACT_VERSION,
         updatedAt: Date.now(),
         updatedBy: { participantId: socket.id, name: participant.name },
-        revision: currentRevision + 1,
+        revision: activeRevision + 1,
         ...(commandId ? { commandId } : {})
       };
       membership.room.route = enrichedRoute;

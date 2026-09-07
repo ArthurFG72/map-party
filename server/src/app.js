@@ -33,8 +33,9 @@ export function createApp({
   app.use(express.json({ limit: '32kb' }));
   app.get('/health', (_req, res) => res.json({ ok: true }));
   const limiter = restRateLimit || createIpRateLimit();
+  const resolvedRouteService = routeService || createRouteService();
   app.use('/api/geocode', geocodeRouter(geocodeService || createGeocodeService(), limiter));
-  app.use('/api/route', routeRouter(routeService || createRouteService(), limiter));
+  app.use('/api/route', routeRouter(resolvedRouteService, limiter));
   app.use('/api/pois', poiRouter(poiService || createPoiService(), limiter));
   if (clientDist) {
     app.use(express.static(clientDist));
@@ -49,6 +50,6 @@ export function createApp({
     cors: { origin: corsOrigin, methods: ['GET', 'POST'] },
     maxHttpBufferSize: 128_000
   });
-  const store = registerSocketHandlers(io, new PartyStore({ maxRoomParticipants }));
+  const store = registerSocketHandlers(io, new PartyStore({ maxRoomParticipants }), { routeService: resolvedRouteService });
   return { app, httpServer, io, store };
 }

@@ -45,11 +45,35 @@ test('serviço de rotas valida a solicitação e a resposta do provedor', async 
   const service = createRouteService({
     fetchImpl: async (url) => {
       assert.match(url.pathname, /route\/v1\/driving/);
+      assert.equal(url.searchParams.get('steps'), 'true');
+      assert.equal(url.searchParams.get('geometries'), 'geojson');
       return {
         ok: true,
         json: async () => ({
           code: 'Ok',
-          routes: [{ geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] }, distance: 1500, duration: 300 }]
+          routes: [{
+            geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] },
+            distance: 1500,
+            duration: 300,
+            legs: [{
+              distance: 1500,
+              duration: 300,
+              summary: 'Centro',
+              steps: [{
+                distance: 1500,
+                duration: 300,
+                name: 'Avenida Central',
+                ref: 'BR-001',
+                mode: 'driving',
+                geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] },
+                intersections: [{ location: [-46.6, -23.5] }],
+                maneuver: {
+                  type: 'turn', modifier: 'right', location: [-46.6, -23.5],
+                  bearing_before: 10, bearing_after: 90
+                }
+              }]
+            }]
+          }]
         })
       };
     }
@@ -64,6 +88,31 @@ test('serviço de rotas valida a solicitação e a resposta do provedor', async 
   assert.equal(route.origin.label, 'Origem');
   assert.equal(route.distance, 1500);
   assert.equal(route.contractVersion, 1);
+  assert.equal(route.legs[0].steps[0].maneuver.bearingBefore, 10);
+  assert.equal(route.legs[0].steps[0].maneuver.bearingAfter, 90);
+  assert.equal(route.legs[0].steps[0].name, 'Avenida Central');
+  assert.equal('geometry' in route.legs[0].steps[0], false, 'remove geometria duplicada do step');
+  assert.equal('intersections' in route.legs[0].steps[0], false, 'remove detalhes não usados do step');
+});
+
+test('serviço de rotas rejeita resposta OSRM sem steps válidos', async () => {
+  const service = createRouteService({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        code: 'Ok',
+        routes: [{
+          geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+          distance: 100,
+          duration: 10,
+          legs: [{ distance: 100, duration: 10, steps: [] }]
+        }]
+      })
+    })
+  });
+  await assert.rejects(() => service.calculate({
+    profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 1, lng: 1 }
+  }), { code: 'PROVIDER_ERROR' });
 });
 
 test('POIs valida bbox, normaliza centros de ways e deduplica resultados', async () => {

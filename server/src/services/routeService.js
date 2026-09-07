@@ -15,6 +15,7 @@ export function createRouteService({
       const url = new URL(`/route/v1/driving/${coordinates}`, baseUrl);
       url.searchParams.set('overview', 'simplified');
       url.searchParams.set('geometries', 'geojson');
+      url.searchParams.set('steps', 'true');
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -22,13 +23,15 @@ export function createRouteService({
         if (!response.ok) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
         const body = await response.json();
         const candidate = body?.routes?.[0];
-        const route = body?.code === 'Ok' && candidate ? cleanRoute({
+        const legs = compactOsrmLegs(candidate?.legs);
+        const route = body?.code === 'Ok' && candidate && legs ? cleanRoute({
           contractVersion: CONTRACT_VERSION,
           origin,
           destination,
           geometry: candidate.geometry,
           distance: candidate.distance,
-          duration: candidate.duration
+          duration: candidate.duration,
+          legs
         }) : null;
         if (!route) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
         return route;
@@ -41,6 +44,30 @@ export function createRouteService({
       }
     }
   };
+}
+
+export function compactOsrmLegs(rawLegs) {
+  if (!Array.isArray(rawLegs) || rawLegs.length < 1) return null;
+  return rawLegs.map((leg) => ({
+    distance: leg?.distance,
+    duration: leg?.duration,
+    ...(leg?.summary != null ? { summary: leg.summary } : {}),
+    steps: Array.isArray(leg?.steps) ? leg.steps.map((step) => ({
+      distance: step?.distance,
+      duration: step?.duration,
+      ...(step?.name != null ? { name: step.name } : {}),
+      ...(step?.ref != null ? { ref: step.ref } : {}),
+      ...(step?.mode != null ? { mode: step.mode } : {}),
+      maneuver: {
+        type: step?.maneuver?.type,
+        location: step?.maneuver?.location,
+        ...(step?.maneuver?.modifier != null ? { modifier: step.maneuver.modifier } : {}),
+        ...(step?.maneuver?.bearing_before != null ? { bearingBefore: step.maneuver.bearing_before } : {}),
+        ...(step?.maneuver?.bearing_after != null ? { bearingAfter: step.maneuver.bearing_after } : {}),
+        ...(step?.maneuver?.exit != null ? { exit: step.maneuver.exit } : {})
+      }
+    })) : null
+  }));
 }
 
 function cleanRouteRequest(payload) {

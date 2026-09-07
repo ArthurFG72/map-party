@@ -191,9 +191,34 @@ export function cleanRoute(value) {
 export function cleanRouteUpdate(value) {
   const route = cleanRoute(value);
   if (!route) return null;
+  const metadata = cleanRouteCommandMetadata(value);
+  if (!metadata) return null;
+  return { contractVersion: CONTRACT_VERSION, route, ...metadata };
+}
+
+function cleanRouteCommandMetadata(value) {
   const commandId = value.commandId == null ? null : cleanCommandId(value.commandId);
   if (value.commandId != null && commandId == null) return null;
   const routeRevision = value.routeRevision == null ? null : cleanRouteRevision(value.routeRevision);
   if (value.routeRevision != null && routeRevision == null) return null;
-  return { contractVersion: CONTRACT_VERSION, route, commandId, routeRevision };
+  return { commandId, routeRevision };
+}
+
+export function cleanRouteIntent(value) {
+  if (!value || typeof value !== 'object' || !acceptsContractVersion(value)) return null;
+  if (value.profile != null && value.profile !== 'driving') return null;
+  const origin = cleanPoint(value.origin);
+  const destination = cleanPoint(value.destination);
+  const metadata = cleanRouteCommandMetadata(value);
+  if (!origin || !destination || !metadata) return null;
+  // Legacy clients still send the complete route. Validate that shape even
+  // though the authoritative geometry and totals will come from OSRM.
+  if (value.geometry != null && !cleanRoute(value)) return null;
+  return {
+    contractVersion: CONTRACT_VERSION,
+    profile: 'driving',
+    origin,
+    destination,
+    ...metadata
+  };
 }

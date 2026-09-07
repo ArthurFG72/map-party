@@ -4,6 +4,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { calculateRoute, searchPlaces, searchPois } from '../api';
 import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
+import { buildNavigationGuidance } from '../navigationGuidance';
 import { loadPartyPoints, savePartyPoints } from '../offlineStore';
 
 const INITIAL_REGION = { latitude: -14.2, longitude: -51.9, latitudeDelta: 35, longitudeDelta: 35 };
@@ -80,10 +81,11 @@ export default function PartyScreen({ session, onLeave }) {
   const [poiMessage, setPoiMessage] = useState('Aproxime o mapa para ver locais próximos.');
   const [selectedPoi, setSelectedPoi] = useState(null);
   const [navigationActive, setNavigationActive] = useState(false);
-  const [remainingMeters, setRemainingMeters] = useState(null);
-  const [remainingSeconds, setRemainingSeconds] = useState(null);
+  const [navigationGuidance, setNavigationGuidance] = useState(null);
+  const [recalculating, setRecalculating] = useState(false);
   const poiRequestRef = useRef(0);
   const didCenterUserRef = useRef(false);
+  const offRouteReadingsRef = useRef(0);
   const categoryKey = activeCategories.join(',');
 
   useEffect(() => {
@@ -145,20 +147,20 @@ export default function PartyScreen({ session, onLeave }) {
 
   useEffect(() => {
     if (!navigationActive || !location.position || !party.route?.destination) return;
-    const remaining = distanceBetween(location.position, party.route.destination);
-    setRemainingMeters(remaining);
-    const speed = Number(location.position.speed);
-    const seconds = Number.isFinite(speed) && speed > 1
-      ? remaining / speed
-      : party.route.duration * Math.min(1, remaining / Math.max(1, party.route.distance));
-    setRemainingSeconds(seconds);
+    const nextGuidance = buildNavigationGuidance(party.route, location.position);
+    if (!nextGuidance) return;
+    offRouteReadingsRef.current = nextGuidance.offRoute ? offRouteReadingsRef.current + 1 : 0;
+    setNavigationGuidance({
+      ...nextGuidance,
+      offRoute: nextGuidance.offRoute && offRouteReadingsRef.current >= 2
+    });
     mapRef.current?.animateToRegion({
       latitude: location.position.lat,
       longitude: location.position.lng,
       latitudeDelta: 0.018,
       longitudeDelta: 0.018
     }, 450);
-    if (remaining < 45) {
+    if (nextGuidance.arrived) {
       setMessage('Você chegou ao destino.');
       setNavigationActive(false);
     }
@@ -216,6 +218,8 @@ export default function PartyScreen({ session, onLeave }) {
   function startNavigation() {
     if (!party.route) return setMessage('Defina origem e destino primeiro.');
     if (!location.position) return setMessage('Aguardando uma posição do GPS para iniciar.');
+    offRouteReadingsRef.current = 0;
+    setNavigationGuidance(buildNavigationGuidance(party.route, location.position));
     setNavigationActive(true);
     setMessage('Navegação iniciada. Siga a linha azul.');
     mapRef.current?.animateToRegion({ latitude: location.position.lat, longitude: location.position.lng, latitudeDelta: 0.018, longitudeDelta: 0.018 }, 500);
@@ -223,7 +227,36 @@ export default function PartyScreen({ session, onLeave }) {
 
   function stopNavigation() {
     setNavigationActive(false);
+    offRouteReadingsRef.current = 0;
     setMessage('Navegação pausada.');
+  }
+
+  async function recalculateRoute() {
+    if (!party.joined) return setMessage('Aguarde a reconexão para recalcular a rota.');
+    if (!location.position || !party.route?.destination) return setMessage('Localização ou destino indisponível para recálculo.');
+    const origin = {
+      lat: location.position.lat,
+      lng: location.position.lng,
+      label: 'Minha localização atual',
+      source: 'geolocation'
+    };
+    const destination = party.route.destination;
+    setRecalculating(true);
+    setMessage('Recalculando rota…');
+    try {
+      const route = await calculateRoute(origin, destination);
+      await party.publishRoute(route);
+      const nextPoints = { origin, destination };
+      setPoints(nextPoints);
+      savePartyPoints(session.roomId, nextPoints);
+      offRouteReadingsRef.current = 0;
+      setNavigationGuidance(buildNavigationGuidance(route, location.position));
+      setMessage('Rota recalculada e compartilhada.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setRecalculating(false);
+    }
   }
 
   async function shareParty() {
@@ -242,6 +275,7 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   const routeCoordinates = party.route?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [];
+  const progressPercent = Math.round((navigationGuidance?.progress || 0) * 100);
   const connection = party.offline
     ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
     : CONNECTION_PRESENTATION[party.connectionStatus] || CONNECTION_PRESENTATION.connecting;
@@ -311,13 +345,24 @@ export default function PartyScreen({ session, onLeave }) {
           </View>
         </Marker>)}
       </MapView>
-      {navigationActive && <View style={styles.navigationCard}>
+      {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
         <View style={styles.navigationCardText}>
-          <Text style={styles.navigationEyebrow}>NAVEGANDO</Text>
-          <Text style={styles.navigationDistance}>{remainingMeters == null ? 'Calculando…' : formatDistance(remainingMeters)}</Text>
-          <Text style={styles.navigationEta}>{remainingSeconds == null ? 'A caminho do destino' : `aprox. ${formatDuration(remainingSeconds)}`}</Text>
+          <Text style={styles.navigationEyebrow}>{navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
+          <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
+          <Text style={styles.navigationEta}>{navigationGuidance ? `${formatDistance(navigationGuidance.remainingMeters)} restantes · aprox. ${formatDuration(navigationGuidance.remainingSeconds)}` : 'Calculando progresso e chegada…'}</Text>
+          <View accessibilityRole="progressbar" accessibilityLabel="Progresso da rota" accessibilityValue={{ min: 0, max: 100, now: progressPercent, text: `${progressPercent}% concluído` }} style={styles.navigationProgressTrack}>
+            <View style={[styles.navigationProgressFill, { width: `${progressPercent}%` }]} />
+          </View>
         </View>
-        <Pressable onPress={stopNavigation} style={styles.stopNavigation}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
+        <View style={styles.navigationActions}>
+          {navigationGuidance?.offRoute && <>
+            <Text style={styles.offRouteText}>{Number.isFinite(navigationGuidance.offRouteDistance) ? `${formatDistance(navigationGuidance.offRouteDistance)} fora da rota` : 'Fora da rota'}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Recalcular rota a partir da localização atual" accessibilityState={{ disabled: recalculating || !party.joined, busy: recalculating }} disabled={recalculating || !party.joined} onPress={recalculateRoute} style={[styles.recalculateButton, (recalculating || !party.joined) && styles.disabled]}>
+              <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
+            </Pressable>
+          </>}
+          <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" onPress={stopNavigation} style={styles.stopNavigation}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
+        </View>
       </View>}
       <View pointerEvents="box-none" style={styles.mapControls}>
         <View style={styles.floatingSearch}>
@@ -413,9 +458,11 @@ const styles = StyleSheet.create({
   connectionBannerDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 }, connectionBannerText: { flex: 1, color: '#9a3412', fontSize: 12, fontWeight: '700' },
   mapArea: { flex: 1 }, map: { flex: 1 },
   mapControls: { position: 'absolute', top: 12, left: 12, right: 12 },
-  navigationCard: { position: 'absolute', top: 78, left: 12, right: 12, minHeight: 74, padding: 12, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: '#b9f227', backgroundColor: '#0b172a', flexDirection: 'row', alignItems: 'center', shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 7, zIndex: 5 },
-  navigationCardText: { flex: 1 }, navigationEyebrow: { color: '#b9f227', fontSize: 10, fontWeight: '900', letterSpacing: 1 }, navigationDistance: { color: '#fff', fontSize: 23, lineHeight: 27, fontWeight: '900' }, navigationEta: { color: '#a9b8ca', fontSize: 11, marginTop: 1 },
-  stopNavigation: { minHeight: 40, paddingHorizontal: 13, borderRadius: 11, backgroundColor: '#fff', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
+  navigationCard: { position: 'absolute', top: 78, left: 12, right: 12, minHeight: 104, padding: 12, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: '#b9f227', backgroundColor: '#0b172a', flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 7, zIndex: 5 },
+  navigationCardOffRoute: { borderLeftColor: '#fb7185' }, navigationCardText: { flex: 1 }, navigationEyebrow: { color: '#b9f227', fontSize: 10, fontWeight: '900', letterSpacing: 1 }, navigationInstruction: { color: '#fff', fontSize: 17, lineHeight: 21, fontWeight: '900', marginTop: 2 }, navigationEta: { color: '#a9b8ca', fontSize: 11, marginTop: 4 },
+  navigationProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' }, navigationProgressFill: { height: 4, borderRadius: 2, backgroundColor: '#b9f227' },
+  navigationActions: { width: 96, alignItems: 'stretch', gap: 6 }, offRouteText: { color: '#fecdd3', fontSize: 9, lineHeight: 12, fontWeight: '800', textAlign: 'center' }, recalculateButton: { minHeight: 44, paddingHorizontal: 8, borderRadius: 11, backgroundColor: '#e11d48', alignItems: 'center', justifyContent: 'center' }, recalculateButtonText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  stopNavigation: { minHeight: 40, paddingHorizontal: 10, borderRadius: 11, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
   floatingSearch: { minHeight: 50, paddingHorizontal: 13, borderRadius: 25, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', shadowColor: '#0f172a', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   searchIcon: { color: '#475569', fontSize: 24, marginRight: 8 }, floatingInput: { flex: 1, height: 48, color: '#0f172a', fontSize: 15 },
   clearSearchButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, clearSearch: { color: '#64748b', fontSize: 25, lineHeight: 28 }, floatingSearchButton: { color: '#1a73e8', fontSize: 13, fontWeight: '800', paddingVertical: 12 },
