@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; margin: 0; }
+html { background: #0f172a; }
+body {
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+button, input { @apply focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2; }
+.leaflet-container { width: 100%; height: 100%; background: #e2e8f0; }
+.participant-pin { background: transparent; border: 0; }
+.participant-pin__dot { width: 22px; height: 22px; border: 3px solid white; border-radius: 9999px; box-shadow: 0 1px 5px rgb(15 23 42 / .55); }
+
+@media (pointer: coarse) {
+  button { min-height: 44px; }
+  input { min-height: 44px; font-size: 16px; }
+}

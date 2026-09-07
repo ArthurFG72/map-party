@@ -1,0 +1,87 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createGeocodeService, normalizeQuery, normalizeViewbox } from '../src/services/geocodeService.js';
+import { createRouteService } from '../src/services/routeService.js';
+import { createPoiService, normalizePoiRequest } from '../src/services/poiService.js';
+import { TtlLruCache } from '../src/services/ttlCache.js';
+
+test('cache TTL expira e remove a entrada menos recente ao atingir o limite', () => {
+  let now = 100;
+  const cache = new TtlLruCache({ ttlMs: 10, maxEntries: 2, now: () => now });
+  cache.set('a', 1); cache.set('b', 2);
+  assert.equal(cache.get('a'), 1);
+  cache.set('c', 3);
+  assert.equal(cache.get('b'), undefined);
+  now = 111;
+  assert.equal(cache.get('a'), undefined);
+});
+
+test('geocodificação normaliza a busca, limpa resultados e usa cache', async () => {
+  let calls = 0;
+  const service = createGeocodeService({
+    minIntervalMs: 0,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      assert.equal(url.searchParams.get('q'), 'São Paulo');
+      assert.match(options.headers['User-Agent'], /MapParty/);
+      return {
+        ok: true,
+        json: async () => [{ place_id: 10, display_name: ' Praça da Sé ', lat: '-23.5504', lon: '-46.6339', boundingbox: ['-24', '-23', '-47', '-46'] }]
+      };
+    }
+  });
+  assert.equal(normalizeQuery('  São   Paulo  '), 'São Paulo');
+  assert.equal(normalizeViewbox('-47,-23,-46,-24'), '-47,-23,-46,-24');
+  assert.equal(normalizeViewbox('invalido'), null);
+  const first = await service.search('São Paulo', 5);
+  const second = await service.search('São Paulo', 5);
+  assert.equal(calls, 1);
+  assert.deepEqual(first, second);
+  assert.equal(first.results[0].label, 'Praça da Sé');
+  assert.equal(first.results[0].lat, -23.5504);
+});
+
+test('serviço de rotas valida a solicitação e a resposta do provedor', async () => {
+  const service = createRouteService({
+    fetchImpl: async (url) => {
+      assert.match(url.pathname, /route\/v1\/driving/);
+      return {
+        ok: true,
+        json: async () => ({
+          code: 'Ok',
+          routes: [{ geometry: { type: 'LineString', coordinates: [[-46.6, -23.5], [-46.7, -23.6]] }, distance: 1500, duration: 300 }]
+        })
+      };
+    }
+  });
+  await assert.rejects(() => service.calculate({ profile: 'walking' }), { code: 'INVALID_ROUTE' });
+  const route = await service.calculate({
+    profile: 'driving',
+    origin: { lat: -23.5, lng: -46.6, label: 'Origem', source: 'search' },
+    destination: { lat: -23.6, lng: -46.7, label: 'Destino', source: 'map' }
+  });
+  assert.equal(route.origin.label, 'Origem');
+  assert.equal(route.distance, 1500);
+});
+
+test('POIs valida bbox, normaliza centros de ways e deduplica resultados', async () => {
+  assert.equal(normalizePoiRequest({ bbox: '-49,-26,-48,-25', categories: 'restaurant', limit: 10 }).limit, 10);
+  assert.equal(normalizePoiRequest({ bbox: 'invalido' }), null);
+  let calls = 0;
+  const service = createPoiService({ fetchImpl: async (_url, options) => {
+    calls += 1;
+    assert.equal(options.method, 'POST');
+    assert.match(options.headers['User-Agent'], /MapParty/);
+    return { ok: true, json: async () => ({ elements: [
+      { type: 'node', id: 1, lat: -25.1, lon: -48.1, tags: { amenity: 'restaurant', name: 'A' } },
+      { type: 'way', id: 2, center: { lat: -25.1, lon: -48.1 }, tags: { amenity: 'restaurant', name: 'Duplicado' } },
+      { type: 'node', id: 3, lat: -25.2, lon: -48.2, tags: { amenity: 'fuel', name: 'Posto' } }
+    ] }) };
+  } });
+  const first = await service.search({ bbox: '-49,-26,-48,-25', categories: 'restaurant,fuel', limit: 20 });
+  const second = await service.search({ bbox: '-49,-26,-48,-25', categories: 'restaurant,fuel', limit: 20 });
+  assert.equal(first.results.length, 2);
+  assert.equal(first.results[0].category, 'restaurant');
+  assert.equal(calls, 1);
+  assert.equal(second.results.length, 2);
+});

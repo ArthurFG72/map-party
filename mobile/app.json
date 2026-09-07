@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Map Party",
+    "slug": "map-party",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "mapparty",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.arthur.mapparty",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "O Map Party usa sua localização enquanto o app está aberto para mostrá-la aos participantes da party.",
+        "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor de desenvolvimento na sua rede local.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Permitir que o Map Party use sua localização enquanto o app estiver aberto."
+        }
+      ],
+      "expo-sqlite"
+    ]
+  }
+}

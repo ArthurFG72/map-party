@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: map-party-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
+      - key: CLIENT_ORIGIN
+        value: '*'

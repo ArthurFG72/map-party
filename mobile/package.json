@@ -1,0 +1,23 @@
+{
+  "name": "map-party-mobile",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "start:tunnel": "expo start --tunnel",
+    "ios": "expo start --ios",
+    "check": "expo export --platform ios --output-dir dist-ios"
+  },
+  "dependencies": {
+    "expo": "~57.0.20",
+    "expo-constants": "~57.0.17",
+    "expo-location": "~57.0.16",
+    "expo-sqlite": "~57.0.2",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-maps": "1.27.2",
+    "socket.io-client": "^4.8.1"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "map-party",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "workspaces": ["client", "server", "mobile"],
+  "scripts": {
+    "dev": "concurrently -n servidor,cliente -c cyan,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "start": "npm run start -w server",
+    "iphone": "npm run build && npm start",
+    "mobile": "npm run start -w mobile",
+    "mobile:check": "npm run check -w mobile",
+    "build": "npm run build -w client",
+    "test": "npm run test -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
