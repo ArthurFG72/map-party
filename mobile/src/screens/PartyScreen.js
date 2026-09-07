@@ -170,7 +170,7 @@ export default function PartyScreen({ session, onLeave }) {
     setLoading(true);
     setMessage('Buscando…');
     try {
-      const body = await searchPlaces(query, visibleRegion);
+      const body = await searchPlaces(query, visibleRegion, location.position);
       setResults(body.results || []);
       setMessage(body.results?.length ? '' : 'Nenhum lugar encontrado.');
     } catch (error) {

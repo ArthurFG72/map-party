@@ -19,7 +19,15 @@ export function normalizeViewbox(value) {
   return coordinates.map((item) => Number(item.toFixed(5))).join(',');
 }
 
-function cleanResult(item) {
+export function normalizeCenter(value) {
+  if (!value || typeof value !== 'object') return null;
+  const lat = Number(value.lat);
+  const lng = Number(value.lng);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) return null;
+  return { lat: Number(lat.toFixed(5)), lng: Number(lng.toFixed(5)) };
+}
+
+function cleanResult(item, center) {
   const lat = Number(item?.lat);
   const lng = Number(item?.lon);
   if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
@@ -41,8 +49,18 @@ function cleanResult(item) {
     lng,
     bbox: bbox?.every(Number.isFinite) ? bbox : null,
     category: typeof item.category === 'string' ? item.category : '',
-    type: typeof item.type === 'string' ? item.type : ''
+    type: typeof item.type === 'string' ? item.type : '',
+    importance: Number.isFinite(Number(item.importance)) ? Number(item.importance) : 0,
+    distanceMeters: center ? distanceBetween(center, { lat, lng }) : null
   };
+}
+
+function distanceBetween(first, second) {
+  const latitude = (second.lat - first.lat) * Math.PI / 180;
+  const longitude = (second.lng - first.lng) * Math.PI / 180;
+  const a = Math.sin(latitude / 2) ** 2
+    + Math.cos(first.lat * Math.PI / 180) * Math.cos(second.lat * Math.PI / 180) * Math.sin(longitude / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 export function createGeocodeService({
@@ -58,9 +76,10 @@ export function createGeocodeService({
   let queue = Promise.resolve();
   let lastStartedAt = 0;
 
-  async function request(query, limit, viewbox) {
+  async function request(query, limit, viewbox, center) {
     const normalizedViewbox = normalizeViewbox(viewbox);
-    const key = `${query.toLocaleLowerCase('pt-BR')}|${limit}|${normalizedViewbox || ''}`;
+    const normalizedCenter = normalizeCenter(center);
+    const key = `${query.toLocaleLowerCase('pt-BR')}|${limit}|${normalizedViewbox || ''}|${normalizedCenter ? `${normalizedCenter.lat},${normalizedCenter.lng}` : ''}`;
     const cached = cache.get(key);
     if (cached) return cached;
 
@@ -77,20 +96,48 @@ export function createGeocodeService({
         url.searchParams.set('q', query);
         url.searchParams.set('format', 'jsonv2');
         url.searchParams.set('limit', String(limit));
-        url.searchParams.set('addressdetails', '0');
+        url.searchParams.set('addressdetails', '1');
+        url.searchParams.set('accept-language', 'pt-BR');
+        if (normalizedCenter) {
+          url.searchParams.set('lat', String(normalizedCenter.lat));
+          url.searchParams.set('lon', String(normalizedCenter.lng));
+          url.searchParams.set('countrycodes', 'br');
+        }
         if (normalizedViewbox) {
           url.searchParams.set('viewbox', normalizedViewbox);
-          url.searchParams.set('bounded', '0');
+          url.searchParams.set('bounded', normalizedCenter ? '1' : '0');
         }
-        const response = await fetchImpl(url, {
+        let response = await fetchImpl(url, {
           headers: { Accept: 'application/json', 'User-Agent': userAgent },
           signal: controller.signal
         });
         if (!response.ok) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
-        const payload = await response.json();
+        let payload = await response.json();
         if (!Array.isArray(payload)) throw Object.assign(new Error('Invalid provider response'), { code: 'PROVIDER_ERROR' });
+        // Keep local results first, but retry globally when the local country filter
+        // hides a valid result (for example an international address explicitly typed).
+        if (!payload.length && normalizedCenter) {
+          const fallbackUrl = new URL(url);
+          fallbackUrl.searchParams.delete('countrycodes');
+          fallbackUrl.searchParams.set('bounded', '0');
+          response = await fetchImpl(fallbackUrl, {
+            headers: { Accept: 'application/json', 'User-Agent': userAgent },
+            signal: controller.signal
+          });
+          if (!response.ok) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
+          payload = await response.json();
+          if (!Array.isArray(payload)) throw Object.assign(new Error('Invalid provider response'), { code: 'PROVIDER_ERROR' });
+        }
+        let results = payload.map((item) => cleanResult(item, normalizedCenter)).filter(Boolean);
+        if (normalizedCenter) {
+          results.sort((first, second) => {
+            const firstScore = (first.distanceMeters ?? Number.MAX_SAFE_INTEGER) * (1.15 - Math.min(first.importance, 1) * 0.15);
+            const secondScore = (second.distanceMeters ?? Number.MAX_SAFE_INTEGER) * (1.15 - Math.min(second.importance, 1) * 0.15);
+            return firstScore - secondScore;
+          });
+        }
         const result = {
-          results: payload.slice(0, limit).map(cleanResult).filter(Boolean),
+          results: results.slice(0, limit),
           attribution: 'Dados de busca © contribuidores do OpenStreetMap (Nominatim)'
         };
         cache.set(key, result);

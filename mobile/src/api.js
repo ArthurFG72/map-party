@@ -21,7 +21,7 @@ async function requestJson(path, options = {}) {
   }
 }
 
-export function searchPlaces(query, region) {
+export function searchPlaces(query, region, location) {
   const params = new URLSearchParams({ q: query.trim(), limit: '5' });
   if (region) {
     const west = region.longitude - region.longitudeDelta / 2;
@@ -29,6 +29,10 @@ export function searchPlaces(query, region) {
     const east = region.longitude + region.longitudeDelta / 2;
     const south = region.latitude - region.latitudeDelta / 2;
     params.set('viewbox', [west, north, east, south].map((value) => value.toFixed(5)).join(','));
+  }
+  if (location && Number.isFinite(location.lat) && Number.isFinite(location.lng)) {
+    params.set('lat', location.lat.toFixed(5));
+    params.set('lon', location.lng.toFixed(5));
   }
   return requestJson(`/api/geocode?${params}`);
 }
