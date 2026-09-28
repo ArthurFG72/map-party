@@ -1236,13 +1236,6 @@ export default function PartyScreen({ session, onLeave }) {
     </View>}
 
      <View style={styles.mapArea}>
-       {navigationActive && <View
-         {...speedBubbleResponder.panHandlers}
-         accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}. Segure e arraste para reposicionar.`}
-         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
-       >
-         <Text style={styles.speedBubbleText}>{formatSpeed(location.position)}</Text>
-       </View>}
        <MapView
         ref={mapRef}
         style={styles.map}
@@ -1346,6 +1339,13 @@ export default function PartyScreen({ session, onLeave }) {
           </Marker>;
         })}
       </MapView>
+      {navigationActive && <View
+        {...speedBubbleResponder.panHandlers}
+        accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}. Segure e arraste para reposicionar.`}
+        style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
+      >
+        <Text style={styles.speedBubbleText}>{formatSpeed(location.position)}</Text>
+      </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
         <View style={styles.navigationCardText}>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
