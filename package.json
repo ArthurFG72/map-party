@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "license": "MIT",
   "private": true,
-  "workspaces": ["client", "server", "mobile"],
+  "workspaces": [
+    "client",
+    "server",
+    "mobile"
+  ],
   "scripts": {
     "dev": "concurrently -n servidor,cliente -c cyan,green \"npm run dev -w server\" \"npm run dev -w client\"",
     "start": "npm run start -w server",
@@ -18,5 +22,9 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "dependencies": {
+    "react-dom": "19.2.3",
+    "react-native-web": "^0.21.2"
   }
 }
