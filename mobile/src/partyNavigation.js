@@ -1,5 +1,14 @@
 import { buildNavigationGuidance } from './navigationGuidance.js';
 
+export function preserveRouteEndpoints(route, origin, destination, reroutedFrom = null) {
+  if (!route) return route;
+  return {
+    ...route,
+    ...(origin ? { origin: { ...origin } } : {}),
+    ...(destination ? { destination: { ...destination } } : {}),
+    ...(reroutedFrom ? { reroutedFrom: { ...reroutedFrom } } : {})
+  };
+}
 function validRoute(route) {
   return route?.geometry?.type === 'LineString'
     && Array.isArray(route.geometry.coordinates)

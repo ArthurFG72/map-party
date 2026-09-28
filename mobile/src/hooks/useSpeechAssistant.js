@@ -1,0 +1,125 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
+import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
+
+function readableSpeechError(event) {
+  const raw = event?.message ?? event?.detail ?? event?.error;
+  const detail = raw && typeof raw === 'object' ? raw.detail || raw.message || raw.error : raw;
+  const value = String(detail || '').trim();
+  const normalized = value.toLowerCase();
+  if (normalized === 'bad request' || normalized.includes('bad request')) return 'O serviço de voz recusou esta tentativa. Verifique a conexão e tente falar novamente.';
+  if (normalized.includes('network') || normalized.includes('internet')) return 'O reconhecimento de voz precisa de conexão. Tente novamente quando a rede estabilizar.';
+  if (normalized.includes('permission') || normalized.includes('not allowed')) return 'Permita o microfone e o reconhecimento de voz nas configurações.';
+  return value || 'Não foi possível reconhecer a fala.';
+}
+
+export function useSpeechAssistant({ onFinalTranscript }) {
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [error, setError] = useState('');
+  const keepSessionRef = useRef(false);
+  const processingRef = useRef(false);
+  const restartTimerRef = useRef(null);
+  const restartAttemptRef = useRef(0);
+  const startInFlightRef = useRef(false);
+  const callbackRef = useRef(onFinalTranscript);
+  const nativeModule = useMemo(() => requireOptionalNativeModule('ExpoSpeechRecognition'), []);
+  callbackRef.current = onFinalTranscript;
+  useEffect(() => {
+    if (!nativeModule) return undefined;
+    const emitter = new EventEmitter(nativeModule);
+    const restart = () => {
+      if (!keepSessionRef.current || processingRef.current || restartTimerRef.current) return;
+      const delay = Math.min(1_200, 350 + restartAttemptRef.current * 150);
+      restartAttemptRef.current += 1;
+      restartTimerRef.current = setTimeout(() => {
+        restartTimerRef.current = null;
+        if (!keepSessionRef.current) return;
+        Promise.resolve(nativeModule.start({
+          lang: 'pt-BR',
+          interimResults: true,
+          continuous: true,
+          ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
+        })).then(() => {
+          restartAttemptRef.current = 0;
+        }).catch(() => {
+          if (keepSessionRef.current) restart();
+        });
+      }, delay);
+    };
+    const subscriptions = [
+      emitter.addListener('start', () => setListening(true)),
+      emitter.addListener('end', () => {
+        if (!keepSessionRef.current) setListening(false);
+        else restart();
+      }),
+      emitter.addListener('result', (event) => {
+        const text = event.results?.[0]?.transcript || '';
+        setTranscript(text);
+        if (event.isFinal && text.trim() && !processingRef.current) {
+          processingRef.current = true;
+          // A sessão contínua continua ativa enquanto o assistente processa
+          // e fala a resposta; ela será reiniciada no finally abaixo.
+          Promise.resolve(nativeModule.stop()).catch(() => undefined);
+          Promise.resolve(callbackRef.current?.(text.trim())).then(() => undefined, () => undefined).finally(() => {
+            processingRef.current = false;
+            restart();
+          });
+        }
+      }),
+      emitter.addListener('error', (event) => {
+        setError(readableSpeechError(event));
+        if (!keepSessionRef.current) setListening(false);
+        else restart();
+      })
+    ];
+    return () => {
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+      subscriptions.forEach((subscription) => subscription.remove());
+    };
+  }, [nativeModule]);
+  const start = useCallback(async () => {
+    setError('');
+    if (!nativeModule) {
+      setError('O reconhecimento de voz estará disponível no build nativo atualizado.');
+      return false;
+    }
+    if (startInFlightRef.current) return true;
+    keepSessionRef.current = true;
+    restartAttemptRef.current = 0;
+    startInFlightRef.current = true;
+    try {
+      const permission = await nativeModule.requestPermissionsAsync();
+      if (!permission?.granted) {
+        keepSessionRef.current = false;
+        setError('Permita o microfone e o reconhecimento de voz para falar com o assistente.');
+        return false;
+      }
+      await nativeModule.start({
+        lang: 'pt-BR',
+        interimResults: true,
+        continuous: true,
+        ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
+      });
+      return true;
+    } catch (error) {
+      keepSessionRef.current = false;
+      setListening(false);
+      setError(readableSpeechError(error));
+      return false;
+    } finally {
+      startInFlightRef.current = false;
+    }
+  }, [nativeModule]);
+  const stop = useCallback(() => {
+    keepSessionRef.current = false;
+    processingRef.current = false;
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = null;
+    restartAttemptRef.current = 0;
+    Promise.resolve(nativeModule?.stop()).catch(() => undefined);
+    setListening(false);
+  }, [nativeModule]);
+  return { listening, transcript, error, start, stop };
+}

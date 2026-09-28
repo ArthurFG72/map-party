@@ -1,9 +1,6 @@
 import Constants from 'expo-constants';
 
-function developmentServerUrl() {
-  const hostUri = Constants.expoConfig?.hostUri || Constants.expoGoConfig?.debuggerHost || '';
-  const host = hostUri.split(':')[0];
-  return host ? `http://${host}:3001` : 'http://localhost:3001';
-}
+const PUBLIC_SERVER_URL = 'https://18-228-44-32.sslip.io';
 
-export const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL || developmentServerUrl()).replace(/\/$/, '');
+export const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL || PUBLIC_SERVER_URL).replace(/\/$/, '');
+export const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';

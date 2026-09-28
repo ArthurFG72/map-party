@@ -1,14 +1,25 @@
 import * as SQLite from 'expo-sqlite';
+import { prepareOfflineRoutePackageForStorage, validateOfflineRoutePackage } from './offlineRoutePackage';
+import { createDeviceId, validDeviceId } from './deviceIdentity';
 
 let databasePromise;
 let placeMutationQueue = Promise.resolve();
 let participantTokenPromise;
+let deviceIdPromise;
 
 const FAVORITE_PLACES_KEY = 'places:favorites';
 const RECENT_PLACES_KEY = 'places:recent';
+const ROUTE_ORIGINS_KEY = 'routes:origins';
+const ROUTE_HISTORY_KEY = 'routes:history';
 const PARTICIPANT_TOKEN_KEY = 'identity:participant-token';
+const DEVICE_ID_KEY = 'identity:device-id';
+const ACTIVE_TRACKING_ROOM_KEY = 'tracking:active-room';
+const PERMISSION_PROMPT_PREFIX = 'permissions:prompted:';
 const MAX_FAVORITE_PLACES = 50;
 const MAX_RECENT_PLACES = 12;
+const MAX_ROUTE_ORIGINS = 10;
+const MAX_ROUTE_HISTORY = 10;
+const OFFLINE_ROUTE_PACKAGE_PREFIX = 'offline:route-package:';
 
 async function database() {
   if (!databasePromise) {
@@ -74,6 +85,20 @@ export function getOrCreateParticipantToken() {
     })();
   }
   return participantTokenPromise;
+}
+
+export function getOrCreateDeviceId() {
+  if (!deviceIdPromise) {
+    deviceIdPromise = (async () => {
+      let stored;
+      try { stored = await readState(DEVICE_ID_KEY); } catch { /* Create a stable in-memory fallback below. */ }
+      if (validDeviceId(stored)) return stored;
+      const deviceId = createDeviceId();
+      try { await writeState(DEVICE_ID_KEY, deviceId); } catch { /* Keep the device ID for this app session. */ }
+      return deviceId;
+    })();
+  }
+  return deviceIdPromise;
 }
 
 export function placeStorageId(place) {
@@ -151,6 +176,52 @@ export function saveRecentPlace(place) {
   ].slice(0, MAX_RECENT_PLACES)).catch(() => []);
 }
 
+export async function loadRouteOrigins() {
+  try { return (await readState(ROUTE_ORIGINS_KEY) || []).map(normalizeStoredPlace).filter(Boolean).slice(0, MAX_ROUTE_ORIGINS); }
+  catch { return []; }
+}
+
+export function saveRouteOrigin(place) {
+  const normalized = normalizeStoredPlace(place);
+  if (!normalized) return Promise.resolve([]);
+  return mutatePlaces(ROUTE_ORIGINS_KEY, (current) => [
+    { ...normalized, lastUsedAt: Date.now() },
+    ...current.filter((item) => item.storageId !== normalized.storageId)
+  ].slice(0, MAX_ROUTE_ORIGINS)).catch(() => []);
+}
+
+function normalizeRouteHistory(item) {
+  const origin = normalizeStoredPlace(item?.origin);
+  const destination = normalizeStoredPlace(item?.destination);
+  if (!origin || !destination) return null;
+  return {
+    id: `${origin.storageId}->${destination.storageId}`,
+    origin,
+    destination,
+    ...(Number.isFinite(item?.lastUsedAt) ? { lastUsedAt: item.lastUsedAt } : {})
+  };
+}
+
+export async function loadRouteHistory() {
+  try {
+    return (await readState(ROUTE_HISTORY_KEY) || []).map(normalizeRouteHistory).filter(Boolean).slice(0, MAX_ROUTE_HISTORY);
+  } catch { return []; }
+}
+
+export function saveRouteHistory(origin, destination) {
+  const normalized = normalizeRouteHistory({ origin, destination });
+  if (!normalized) return Promise.resolve([]);
+  const operation = async () => {
+    const current = (await readState(ROUTE_HISTORY_KEY) || []).map(normalizeRouteHistory).filter(Boolean);
+    const next = [{ ...normalized, lastUsedAt: Date.now() }, ...current.filter((item) => item.id !== normalized.id)].slice(0, MAX_ROUTE_HISTORY);
+    await writeState(ROUTE_HISTORY_KEY, next);
+    return next;
+  };
+  const pending = placeMutationQueue.then(operation, operation);
+  placeMutationQueue = pending.catch(() => undefined);
+  return pending.catch(() => []);
+}
+
 export function savePartySnapshot(roomId, snapshot) {
   return writeState(`party:${roomId}`, snapshot).catch(() => undefined);
 }
@@ -167,6 +238,38 @@ export function loadPartyPoints(roomId) {
   return readState(`points:${roomId}`).catch(() => null);
 }
 
+export function setActiveTrackingRoom(roomId) {
+  if (typeof roomId !== 'string' || !roomId.trim()) return writeState(ACTIVE_TRACKING_ROOM_KEY, null);
+  return writeState(ACTIVE_TRACKING_ROOM_KEY, roomId.trim().slice(0, 80));
+}
+
+export function loadActiveTrackingRoom() {
+  return readState(ACTIVE_TRACKING_ROOM_KEY).then((roomId) => typeof roomId === 'string' ? roomId : null).catch(() => null);
+}
+
+export function loadPermissionPrompted(permission) {
+  return readState(`${PERMISSION_PROMPT_PREFIX}${permission}`).then((value) => value === true).catch(() => false);
+}
+
+export function markPermissionPrompted(permission) {
+  return writeState(`${PERMISSION_PROMPT_PREFIX}${permission}`, true).catch(() => undefined);
+}
+
+export async function saveOfflineRoutePackage(value) {
+  const stored = prepareOfflineRoutePackageForStorage(value);
+  if (!stored) return false;
+  try {
+    await writeState(`${OFFLINE_ROUTE_PACKAGE_PREFIX}${stored.id}`, stored);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadOfflineRoutePackage(id) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  return validateOfflineRoutePackage(await readState(`${OFFLINE_ROUTE_PACKAGE_PREFIX}${id.slice(0, 80)}`));
+}
 export async function savePendingLocation(roomId, location) {
   try {
     const db = await database();

@@ -1,6 +1,12 @@
 const EARTH_RADIUS_METERS = 6_371_000;
 const DEFAULT_OFF_ROUTE_METERS = 75;
 const ARRIVAL_RADIUS_METERS = 45;
+const COMPLEX_MANEUVER_RADIUS_METERS = 180;
+const COMPLEX_MANEUVER_TYPES = new Set([
+  'fork', 'roundabout', 'rotary', 'roundabout turn', 'exit roundabout',
+  'exit rotary', 'end of road', 'merge', 'on ramp', 'off ramp',
+  'turn', 'continue', 'notification'
+]);
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -45,7 +51,7 @@ function routeGeometry(route) {
   return (route?.geometry?.coordinates || []).map(coordinatePoint).filter(Boolean);
 }
 
-function closestRoutePosition(coordinates, position) {
+function closestRoutePosition(coordinates, position, preferredHeading = null) {
   if (coordinates.length < 2 || !position) return null;
   let closest = null;
   let distanceAlong = 0;
@@ -55,16 +61,43 @@ function closestRoutePosition(coordinates, position) {
     const end = coordinates[index + 1];
     const segmentDistance = distanceMeters(start, end);
     const projection = projectOnSegment(position, start, end);
+    const segmentHeading = bearingBetween(start, end);
+    const headingDifference = Number.isFinite(preferredHeading) && Number.isFinite(segmentHeading)
+      ? angularDifference(preferredHeading, segmentHeading)
+      : 0;
+    const directionPenalty = Number.isFinite(preferredHeading) && headingDifference > 100
+      ? Math.min(120, (headingDifference - 100) * 2)
+      : 0;
     const candidate = {
       distanceFromRoute: projection.distance,
+      selectionDistance: projection.distance + directionPenalty,
       distanceAlong: distanceAlong + segmentDistance * projection.fraction,
-      segmentIndex: index
+      segmentIndex: index,
+      fraction: projection.fraction
     };
-    if (!closest || candidate.distanceFromRoute < closest.distanceFromRoute) closest = candidate;
+    if (!closest || candidate.selectionDistance < closest.selectionDistance) closest = candidate;
     distanceAlong += segmentDistance;
     totalDistance += segmentDistance;
   }
   return closest ? { ...closest, totalDistance } : null;
+}
+
+export function snapPositionToRoute(route, position, maxDistance = 60) {
+  if (!position || !Number.isFinite(position.lat) || !Number.isFinite(position.lng)) return position;
+  const coordinates = routeGeometry(route);
+  const preferredHeading = Number(position.speed) >= 2.5 && Number.isFinite(Number(position.heading))
+    ? Number(position.heading)
+    : null;
+  const nearest = closestRoutePosition(coordinates, position, preferredHeading);
+  if (!nearest || nearest.distanceFromRoute > maxDistance) return position;
+  const start = coordinates[nearest.segmentIndex];
+  const end = coordinates[nearest.segmentIndex + 1];
+  return {
+    ...position,
+    lat: start.lat + (end.lat - start.lat) * nearest.fraction,
+    lng: start.lng + (end.lng - start.lng) * nearest.fraction,
+    snappedToRoute: true
+  };
 }
 
 function directionText(modifier) {
@@ -103,6 +136,31 @@ export function instructionForStep(step) {
   }
 }
 
+export function isComplexManeuver(step) {
+  const maneuver = step?.maneuver || {};
+  const bearingChange = angularDifference(Number(maneuver.bearingBefore), Number(maneuver.bearingAfter));
+  return COMPLEX_MANEUVER_TYPES.has(maneuver.type)
+    || bearingChange >= 25
+    || maneuver.modifier === 'uturn'
+    || maneuver.modifier === 'sharp left'
+    || maneuver.modifier === 'sharp right';
+}
+
+function bearingBetween(first, second) {
+  if (!first || !second) return null;
+  const lat1 = first.lat * Math.PI / 180;
+  const lat2 = second.lat * Math.PI / 180;
+  const longitude = (second.lng - first.lng) * Math.PI / 180;
+  const y = Math.sin(longitude) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(longitude);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function angularDifference(first, second) {
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return Number.POSITIVE_INFINITY;
+  const difference = Math.abs(first - second) % 360;
+  return difference > 180 ? 360 - difference : difference;
+}
 function routeSteps(route, coordinates) {
   const steps = (route?.legs || []).flatMap((leg) => leg?.steps || []);
   return steps.map((step) => {
@@ -115,7 +173,10 @@ function routeSteps(route, coordinates) {
 export function buildNavigationGuidance(route, location) {
   if (!route || !location || !route.destination) return null;
   const coordinates = routeGeometry(route);
-  const routePosition = closestRoutePosition(coordinates, location);
+  const preferredHeading = Number(location.speed) >= 2.5 && Number.isFinite(Number(location.heading))
+    ? Number(location.heading)
+    : null;
+  const routePosition = closestRoutePosition(coordinates, location, preferredHeading);
   const directToDestination = distanceMeters(location, route.destination);
   const routeDistance = Number.isFinite(route.distance) && route.distance > 0
     ? route.distance
@@ -138,16 +199,48 @@ export function buildNavigationGuidance(route, location) {
   const instructionDistance = next && routePosition
     ? Math.max(0, (next.distanceAlong - routePosition.distanceAlong) * geometryScale)
     : null;
+  const maneuverPoint = coordinatePoint(next?.step?.maneuver?.location);
+  const routeHeading = routePosition && coordinates[routePosition.segmentIndex + 1]
+    ? bearingBetween(coordinates[routePosition.segmentIndex], coordinates[routePosition.segmentIndex + 1])
+    : null;
+  const deviceHeading = Number(location.heading);
+  const deviceSpeed = Number(location.speed);
+  const headingDifference = angularDifference(deviceHeading, routeHeading);
+  const directionMismatch = Boolean(
+    routePosition
+    && deviceSpeed >= 1
+    && headingDifference > 125
+    && routePosition.distanceFromRoute > Math.max(18, Number(location.accuracy) || 0)
+    && (instructionDistance == null || instructionDistance > 60)
+  );
+  const maneuverType = next?.step?.maneuver?.type;
+  const instructionReady = Boolean(next && (
+    instructionDistance == null
+    || instructionDistance <= 140
+    || maneuverType === 'depart'
+    || maneuverType === 'arrive'
+  ));
+  const guidanceInstruction = directionMismatch
+    ? 'Reoriente-se para seguir a rota azul.'
+    : steps.length === 0
+      ? 'Continue pela rota até o destino'
+      : instructionReady
+        ? instructionForStep(next.step)
+        : 'Siga pela rota azul.';
+  const precisionMode = Boolean(next && isComplexManeuver(next.step)
+    && instructionDistance <= COMPLEX_MANEUVER_RADIUS_METERS);
 
   return {
     arrived: directToDestination <= ARRIVAL_RADIUS_METERS,
     progress,
     remainingMeters,
     remainingSeconds,
-    offRoute: Boolean(routePosition && routePosition.distanceFromRoute > threshold),
+    offRoute: Boolean((routePosition && routePosition.distanceFromRoute > threshold) || directionMismatch),
     offRouteDistance: routePosition?.distanceFromRoute ?? null,
-    instruction: next ? instructionForStep(next.step) : 'Continue pela rota até o destino',
+    instruction: guidanceInstruction,
     instructionDistance,
+    maneuverPoint,
+    precisionMode,
     hasSteps: steps.length > 0
   };
 }

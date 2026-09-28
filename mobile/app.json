@@ -1,7 +1,9 @@
 {
   "expo": {
-    "name": "Map Party",
-    "slug": "map-party",
+    "icon": "./assets/eagle-app-icon.png",
+    "name": "Passeio das Águias",
+    "slug": "vgalvao",
+    "name": "Passeio das \u00c1guias",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -10,21 +12,84 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.arthur.mapparty",
       "infoPlist": {
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "O Map Party mantem sua rota atualizada em segundo plano.",
         "NSLocationWhenInUseUsageDescription": "O Map Party usa sua localização enquanto o app está aberto para mostrá-la aos participantes da party.",
         "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor de desenvolvimento na sua rede local.",
+        "NSLocationWhenInUseUsageDescription": "O Map Party usa sua localizacao enquanto o app esta aberto para mostra-la aos participantes da party.",
+        "NSBluetoothAlwaysUsageDescription": "O Map Party usa Bluetooth para retransmitir pedidos SOS proximos.",
+        "NSBluetoothPeripheralUsageDescription": "O Map Party anuncia pedidos SOS para aparelhos proximos.",
+        "NSBluetoothAlwaysUsageDescription": "O Map Party usa Bluetooth para retransmitir pedidos SOS próximos.",
+        "NSBluetoothPeripheralUsageDescription": "O Map Party anuncia pedidos SOS para aparelhos próximos.",
+        "UIBackgroundModes": [
+          "location",
+          "bluetooth-central",
+          "bluetooth-peripheral"
+        ],
+        "NSMicrophoneUsageDescription": "Permitir o microfone para ouvir comandos de navegaÃ§Ã£o.",
+        "NSSpeechRecognitionUsageDescription": "Permitir o reconhecimento de voz para converter comandos em texto.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor publico para sincronizar a party."
       }
+    },
+    "android": {
+      "package": "com.arthur.mapparty",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/eagle-app-icon.png",
+        "backgroundColor": "#0b172a"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECORD_AUDIO",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_ADVERTISE",
+        "NEARBY_WIFI_DEVICES",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_CONNECTED_DEVICE",
+        "POST_NOTIFICATIONS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "plugins": [
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Permitir que o Map Party use sua localização enquanto o app estiver aberto."
+          "locationWhenInUsePermission": "Permitir que o Map Party use sua localização enquanto o app estiver aberto.",
+          "locationAlwaysAndWhenInUsePermission": "Permitir que o Map Party mantenha sua rota atualizada em segundo plano.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationWhenInUsePermission": "Permitir que o Map Party use sua localizacao enquanto o app estiver aberto.",
+          "locationAlwaysAndWhenInUsePermission": "Permitir que o Map Party mantenha sua rota atualizada em segundo plano."
         }
       ],
-      "expo-sqlite"
-    ]
+      "expo-sqlite",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Permitir que o Map Party ouça seus comandos de navegação.",
+          "speechRecognitionPermission": "Permitir que o Map Party converta seus comandos de navegação em texto."
+        }
+      ]
+    ],
+    "updates": {
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "fcce8b86-5921-4af0-aa0b-adab79937f6c"
+      }
+    },
+    "owner": "vgalvaos-team"
   }
 }

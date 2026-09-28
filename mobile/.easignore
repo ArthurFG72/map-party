@@ -1,0 +1,9 @@
+node_modules/
+dist*/
+.expo/
+android/.gradle/
+android/build/
+android/app/build/
+ios/build/
+*.hbc
+*.map
