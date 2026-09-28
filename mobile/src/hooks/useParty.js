@@ -178,7 +178,9 @@ export function useParty(roomId, name, visible = true) {
         });
       });
     }
-    const localTransport = createLocalTransport({ roomId, participantId: name, onMessage: (message) => {
+    const localTransport = createLocalTransport({ roomId, participantId: name, onVerification: (event) => {
+      if (event?.endpointId) localTransportRef.current?.verifyConnection(event.endpointId, true).catch(() => undefined);
+    }, onMessage: (message) => {
       if (message?.type === 'sos-ack' && message.ackFor && pendingSosRef.current.has(message.ackFor)) {
         const current = pendingSosRef.current.get(message.ackFor);
         const next = new Set(current);

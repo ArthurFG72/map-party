@@ -128,9 +128,9 @@ function formatDistance(meters) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 }
 
-function formatSpeed(position) {
+function formatSpeedValue(position) {
   const speed = Number(position?.speed);
-  return Number.isFinite(speed) && speed >= 0 ? `${Math.round(speed * 3.6)} km/h` : '-- km/h';
+  return Number.isFinite(speed) && speed >= 0 ? String(Math.round(speed * 3.6)) : '--';
 }
 
 function formatDuration(seconds) {
@@ -274,24 +274,31 @@ export default function PartyScreen({ session, onLeave }) {
   const ownLocation = party.locationSharingEnabled || navigationActive || Boolean(navigationRoute) ? location.position || ownParticipant?.location : null;
   const visualRoute = navigationRoute || displayedRoute;
   const ownMarkerLocation = useMemo(() => visualRoutePosition(visualRoute, ownLocation), [visualRoute, ownLocation]);
-  const defaultSpeedBubbleLeft = Math.max(12, viewport.width - 126);
-  const [speedBubblePosition, setSpeedBubblePosition] = useState({ left: defaultSpeedBubbleLeft, top: 12 });
+  const speedBubbleSize = 88;
+  const defaultSpeedBubbleLeft = Math.max(8, viewport.width - speedBubbleSize - 12);
+  const speedBubblePositionRef = useRef({ left: defaultSpeedBubbleLeft, top: 12 });
+  const [speedBubblePosition, setSpeedBubblePosition] = useState(() => speedBubblePositionRef.current);
   const speedBubbleResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
     onMoveShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponderCapture: () => true,
+    onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: () => {
-      speedBubbleDragStartRef.current = speedBubblePosition;
+      speedBubbleDragStartRef.current = speedBubblePositionRef.current;
     },
     onPanResponderMove: (_event, gesture) => {
-      const maxLeft = Math.max(12, viewport.width - 122);
-      const maxTop = Math.max(60, viewport.height - 250);
-      setSpeedBubblePosition({
+      const maxLeft = Math.max(8, viewport.width - speedBubbleSize - 8);
+      const maxTop = Math.max(8, viewport.height - speedBubbleSize - 8);
+      const nextPosition = {
         left: Math.max(8, Math.min(maxLeft, speedBubbleDragStartRef.current.left + gesture.dx)),
         top: Math.max(8, Math.min(maxTop, speedBubbleDragStartRef.current.top + gesture.dy))
-      });
+      };
+      speedBubblePositionRef.current = nextPosition;
+      setSpeedBubblePosition(nextPosition);
       speedBubbleCustomizedRef.current = true;
     }
-  }), [speedBubblePosition, viewport.height, viewport.width]);
+  }), [viewport.height, viewport.width]);
   const locationPermissionDenied = location.permissionGranted === false;
   useEffect(() => {
     transitionNavigationState({
@@ -1225,7 +1232,6 @@ export default function PartyScreen({ session, onLeave }) {
       <View accessibilityLabel={`Estado da conexão: ${connection.label.toLocaleLowerCase('pt-BR')}`} style={[styles.statusDot, { backgroundColor: connection.color }]} />
        <View style={styles.headerShareColumn}>
          <Pressable accessibilityRole="button" accessibilityLabel="Compartilhar rota" disabled={navigationLocked} onPress={openRouteSharePicker} style={[styles.headerButton, navigationLocked && styles.disabled]}><Text numberOfLines={1} adjustsFontSizeToFit style={styles.headerButtonText}>Compartilhar rota</Text></Pressable>
-         {!navigationActive && <View accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}`} style={styles.speedBadge}><Text style={styles.speedBadgeText}>{formatSpeed(location.position)}</Text></View>}
        </View>
       <Pressable accessibilityRole="button" accessibilityLabel={speechAssistant.listening ? 'Parar de ouvir' : 'Falar com o assistente'} onPress={speechAssistant.listening ? speechAssistant.stop : speechAssistant.start} style={[styles.headerMicButton, speechAssistant.listening && styles.assistantMicButtonActive]}><Text style={styles.assistantMicText}>{speechAssistant.listening ? '■' : '🎙'}</Text></Pressable>
       <Pressable disabled={navigationLocked} onPress={onLeave} style={[styles.leaveButton, navigationLocked && styles.disabled]}><Text style={styles.leaveText}>Sair</Text></Pressable>
@@ -1339,13 +1345,15 @@ export default function PartyScreen({ session, onLeave }) {
           </Marker>;
         })}
       </MapView>
-      {navigationActive && <View
-        {...speedBubbleResponder.panHandlers}
-        accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}. Segure e arraste para reposicionar.`}
-        style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
-      >
-        <Text style={styles.speedBubbleText}>{formatSpeed(location.position)}</Text>
-      </View>}
+      <View
+       pointerEvents="box-only"
+       {...speedBubbleResponder.panHandlers}
+         accessibilityLabel={`Velocidade atual ${formatSpeedValue(location.position)} quilômetros por hora. Segure e arraste para reposicionar.`}
+         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
+       >
+         <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position)}</Text>
+         <Text style={styles.speedBubbleUnit}>km/h</Text>
+       </View>
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
         <View style={styles.navigationCardText}>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
@@ -1622,7 +1630,7 @@ const styles = StyleSheet.create({
   headerButton: { minHeight: 31, paddingHorizontal: 7, borderRadius: 10, justifyContent: 'center', backgroundColor: '#1a73e8' },
   headerButtonText: { color: '#fff', fontSize: 10, fontWeight: '800', textAlign: 'center' },
   headerMicButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' },
-  speedBadge: { minHeight: 18, paddingHorizontal: 5, borderRadius: 6, backgroundColor: '#172554', alignItems: 'center', justifyContent: 'center' }, speedBubble: { position: 'absolute', zIndex: 20, minWidth: 104, minHeight: 48, paddingHorizontal: 14, borderRadius: 24, backgroundColor: '#172554', borderWidth: 2, borderColor: '#bfdbfe', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 8 }, speedBubbleText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  speedBadge: { minHeight: 18, paddingHorizontal: 5, borderRadius: 6, backgroundColor: '#172554', alignItems: 'center', justifyContent: 'center' }, speedBubble: { position: 'absolute', zIndex: 20, width: 88, height: 88, borderRadius: 44, backgroundColor: '#172554', borderWidth: 2, borderColor: '#bfdbfe', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 8 }, speedBubbleValue: { color: '#fff', fontSize: 30, lineHeight: 34, fontWeight: '900', textAlign: 'center' }, speedBubbleUnit: { color: '#bfdbfe', fontSize: 11, lineHeight: 14, fontWeight: '800', textAlign: 'center' },
   speedBadgeText: { color: '#bfdbfe', fontSize: 9, fontWeight: '900' },
   routeShareBackdrop: { flex: 1, backgroundColor: 'rgba(2, 8, 23, 0.62)', alignItems: 'center', justifyContent: 'center', padding: 22 },
   routeShareMenu: { width: '100%', maxHeight: '75%', padding: 18, borderRadius: 18, backgroundColor: '#fff' },

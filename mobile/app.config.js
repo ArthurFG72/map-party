@@ -14,10 +14,7 @@ module.exports = {
   ...appJson,
   expo: {
     ...appJson.expo,
-    updates: {
-      ...appJson.expo.updates,
-      url: 'https://u.expo.dev/fcce8b86-5921-4af0-aa0b-adab79937f6c'
-    },
+    updates: { enabled: false },
     runtimeVersion: appJson.expo.runtimeVersion || appJson.expo.version,
     plugins,
     android: {

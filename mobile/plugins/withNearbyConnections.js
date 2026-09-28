@@ -1,6 +1,7 @@
 const { withXcodeProject } = require('@expo/config-plugins');
 
 const REPOSITORY = 'https://github.com/google/nearby';
+const REVISION = 'aa71c5209b067b3238ff0462d479452f3eda9165';
 const PRODUCT = 'NearbyConnections';
 
 function findByComment(section, name) {
@@ -27,7 +28,7 @@ function ensurePackage(project) {
     objects.XCRemoteSwiftPackageReference[packageUuid] = {
       isa: 'XCRemoteSwiftPackageReference',
       repositoryURL: REPOSITORY,
-      requirement: { kind: 'branch', branch: 'main' }
+      requirement: { kind: 'revision', revision: REVISION }
     };
     objects.XCRemoteSwiftPackageReference[`${packageUuid}_comment`] = 'XCRemoteSwiftPackageReference "nearby"';
   }
