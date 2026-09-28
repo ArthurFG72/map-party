@@ -23,6 +23,9 @@ final class MapPartyNearbyTransport: NSObject {
   }
   func stop() { queue.async { self.stopLocked() } }
   func send(json: String) { queue.async { guard let manager = self.manager, let data = self.envelopeData(json), !self.trusted.isEmpty else { return }; self.remember(self.fingerprint(data)); _ = manager.send(data, to: Array(self.trusted)) } }
+  // The current JS bridge accepts Nearby verification automatically. Keep the
+  // method for API parity with Android and for a future user-confirmation UI.
+  func verify(endpointID: String, accepted: Bool) { }
   private func contextData() -> Data { (try? JSONSerialization.data(withJSONObject: ["room": roomID, "participant": participantID])) ?? Data() }
   private func stopLocked() { advertiser?.stopAdvertising(); discoverer?.stopDiscovery(); manager = nil; advertiser = nil; discoverer = nil; trusted.removeAll() }
   @discardableResult private func remember(_ key: String) -> Bool { guard !seen.contains(key) else { return false }; seen.insert(key); seenOrder.append(key); if seenOrder.count > Self.dedupLimit { seen.remove(seenOrder.removeFirst()) }; return true }
