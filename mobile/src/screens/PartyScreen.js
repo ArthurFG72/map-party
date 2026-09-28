@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text as NativeText, TextInput, useWindowDimensions, View } from 'react-native';
+import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text as NativeText, TextInput, useWindowDimensions, View } from 'react-native';
 import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { askAssistant, calculateRoute, fetchEmergencyPublicKey, prepareOfflineGraph, searchNearbyPois, searchPlaces, searchPois } from '../api';
@@ -256,6 +256,8 @@ export default function PartyScreen({ session, onLeave }) {
   const lastRecalculationAtRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
   const restoreMapTimerRef = useRef(null);
+  const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
+  const speedBubbleCustomizedRef = useRef(false);
   const voiceHistoryRef = useRef({});
   const assistantHistoryRef = useRef([]);
   const categoryKey = activeCategories.join(',');
@@ -272,6 +274,24 @@ export default function PartyScreen({ session, onLeave }) {
   const ownLocation = party.locationSharingEnabled || navigationActive || Boolean(navigationRoute) ? location.position || ownParticipant?.location : null;
   const visualRoute = navigationRoute || displayedRoute;
   const ownMarkerLocation = useMemo(() => visualRoutePosition(visualRoute, ownLocation), [visualRoute, ownLocation]);
+  const defaultSpeedBubbleLeft = Math.max(12, viewport.width - 126);
+  const [speedBubblePosition, setSpeedBubblePosition] = useState({ left: defaultSpeedBubbleLeft, top: 12 });
+  const speedBubbleResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => {
+      speedBubbleDragStartRef.current = speedBubblePosition;
+    },
+    onPanResponderMove: (_event, gesture) => {
+      const maxLeft = Math.max(12, viewport.width - 122);
+      const maxTop = Math.max(60, viewport.height - 250);
+      setSpeedBubblePosition({
+        left: Math.max(8, Math.min(maxLeft, speedBubbleDragStartRef.current.left + gesture.dx)),
+        top: Math.max(8, Math.min(maxTop, speedBubbleDragStartRef.current.top + gesture.dy))
+      });
+      speedBubbleCustomizedRef.current = true;
+    }
+  }), [speedBubblePosition, viewport.height, viewport.width]);
   const locationPermissionDenied = location.permissionGranted === false;
   useEffect(() => {
     transitionNavigationState({
@@ -1203,10 +1223,10 @@ export default function PartyScreen({ session, onLeave }) {
         <Text numberOfLines={1} style={styles.room}>{party.participants.length} participante{party.participants.length === 1 ? '' : 's'} {'\u00b7'} {session.roomId}</Text>
       </View>
       <View accessibilityLabel={`Estado da conexão: ${connection.label.toLocaleLowerCase('pt-BR')}`} style={[styles.statusDot, { backgroundColor: connection.color }]} />
-      <View style={styles.headerShareColumn}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Compartilhar rota" disabled={navigationLocked} onPress={openRouteSharePicker} style={[styles.headerButton, navigationLocked && styles.disabled]}><Text numberOfLines={1} adjustsFontSizeToFit style={styles.headerButtonText}>Compartilhar rota</Text></Pressable>
-        <View accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}`} style={styles.speedBadge}><Text style={styles.speedBadgeText}>{formatSpeed(location.position)}</Text></View>
-      </View>
+       <View style={styles.headerShareColumn}>
+         <Pressable accessibilityRole="button" accessibilityLabel="Compartilhar rota" disabled={navigationLocked} onPress={openRouteSharePicker} style={[styles.headerButton, navigationLocked && styles.disabled]}><Text numberOfLines={1} adjustsFontSizeToFit style={styles.headerButtonText}>Compartilhar rota</Text></Pressable>
+         {!navigationActive && <View accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}`} style={styles.speedBadge}><Text style={styles.speedBadgeText}>{formatSpeed(location.position)}</Text></View>}
+       </View>
       <Pressable accessibilityRole="button" accessibilityLabel={speechAssistant.listening ? 'Parar de ouvir' : 'Falar com o assistente'} onPress={speechAssistant.listening ? speechAssistant.stop : speechAssistant.start} style={[styles.headerMicButton, speechAssistant.listening && styles.assistantMicButtonActive]}><Text style={styles.assistantMicText}>{speechAssistant.listening ? '■' : '🎙'}</Text></Pressable>
       <Pressable disabled={navigationLocked} onPress={onLeave} style={[styles.leaveButton, navigationLocked && styles.disabled]}><Text style={styles.leaveText}>Sair</Text></Pressable>
     </View>
@@ -1215,8 +1235,15 @@ export default function PartyScreen({ session, onLeave }) {
       <Text style={styles.connectionBannerText}>{connectivityMessage || connection.message}</Text>
     </View>}
 
-    <View style={styles.mapArea}>
-      <MapView
+     <View style={styles.mapArea}>
+       {navigationActive && <View
+         {...speedBubbleResponder.panHandlers}
+         accessibilityLabel={`Velocidade atual ${formatSpeed(location.position)}. Segure e arraste para reposicionar.`}
+         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
+       >
+         <Text style={styles.speedBubbleText}>{formatSpeed(location.position)}</Text>
+       </View>}
+       <MapView
         ref={mapRef}
         style={styles.map}
          initialRegion={INITIAL_REGION}
@@ -1595,7 +1622,7 @@ const styles = StyleSheet.create({
   headerButton: { minHeight: 31, paddingHorizontal: 7, borderRadius: 10, justifyContent: 'center', backgroundColor: '#1a73e8' },
   headerButtonText: { color: '#fff', fontSize: 10, fontWeight: '800', textAlign: 'center' },
   headerMicButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' },
-  speedBadge: { minHeight: 18, paddingHorizontal: 5, borderRadius: 6, backgroundColor: '#172554', alignItems: 'center', justifyContent: 'center' },
+  speedBadge: { minHeight: 18, paddingHorizontal: 5, borderRadius: 6, backgroundColor: '#172554', alignItems: 'center', justifyContent: 'center' }, speedBubble: { position: 'absolute', zIndex: 20, minWidth: 104, minHeight: 48, paddingHorizontal: 14, borderRadius: 24, backgroundColor: '#172554', borderWidth: 2, borderColor: '#bfdbfe', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 8 }, speedBubbleText: { color: '#fff', fontSize: 16, fontWeight: '900' },
   speedBadgeText: { color: '#bfdbfe', fontSize: 9, fontWeight: '900' },
   routeShareBackdrop: { flex: 1, backgroundColor: 'rgba(2, 8, 23, 0.62)', alignItems: 'center', justifyContent: 'center', padding: 22 },
   routeShareMenu: { width: '100%', maxHeight: '75%', padding: 18, borderRadius: 18, backgroundColor: '#fff' },
@@ -1653,7 +1680,7 @@ const styles = StyleSheet.create({
   recenterIcon: { color: '#2563eb', fontSize: 27, fontWeight: '700', lineHeight: 30 },
   pin: { width: 34, height: 34, borderRadius: 17, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
   pinText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-  eagleMarker: { width: 118, alignItems: 'center', justifyContent: 'flex-start' }, eagleMarkerEstimated: { opacity: 0.58 }, eagleMarkerImage: { width: 30, height: 39 },
+  eagleMarker: { width: 132, alignItems: 'center', justifyContent: 'flex-start' }, eagleMarkerEstimated: { opacity: 0.58 }, eagleMarkerImage: { width: 38, height: 50 },
   personLabel: { maxWidth: 110, marginTop: 0, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.94)' }, personLabelText: { color: '#0f172a', fontSize: 9, fontWeight: '800' },
   clusterMarker: { minWidth: 44, height: 44, paddingHorizontal: 9, borderRadius: 22, borderWidth: 3, borderColor: '#fff', backgroundColor: '#1d4ed8', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
   clusterMarkerText: { color: '#fff', fontSize: 14, fontWeight: '900' },
