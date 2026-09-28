@@ -31,7 +31,8 @@
           "NSAllowsLocalNetworking": true
         },
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor publico para sincronizar a party."
+        "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor publico para sincronizar a party.",
+        "NSBonjourServices": ["_mapparty._tcp"]
       }
     },
     "android": {
