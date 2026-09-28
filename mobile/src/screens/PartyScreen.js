@@ -834,11 +834,15 @@ export default function PartyScreen({ session, onLeave }) {
 
   function centerOnMyLocation() {
     if (!location.position) return setMessage('Aguardando uma posição do GPS.');
-    mapRef.current?.animateCamera({
-      center: { latitude: location.position.lat, longitude: location.position.lng },
+    // Keep the camera centered on the same projected coordinate rendered by
+    // the eagle while navigating, not on the raw GPS fix.
+    const center = ownMarkerLocation || location.position;
+    const camera = {
+      center: { latitude: center.lat, longitude: center.lng },
       zoom: 17,
-      heading: cameraHeading(location.position, headingRef)
-    }, { duration: 500 });
+      ...(navigationActive ? { heading: cameraHeading(location.position, headingRef) } : {})
+    };
+    mapRef.current?.animateCamera(camera, { duration: 500 });
   }
 
   function startNavigation(routeOverride = null) {
@@ -1217,7 +1221,7 @@ export default function PartyScreen({ session, onLeave }) {
         style={styles.map}
          initialRegion={INITIAL_REGION}
          mapType={Platform.OS === 'android' ? 'none' : undefined}
-        rotateEnabled={false}
+        rotateEnabled
         pitchEnabled={false}
         showsCompass={false}
         showsUserLocation={false}
@@ -1290,7 +1294,10 @@ export default function PartyScreen({ session, onLeave }) {
             title={session.name}
             accessibilityLabel={`${session.name}, sua localização`}
             anchor={{ x: 0.5, y: 0.74 }}
-            flat
+            // Keep the eagle billboarded to the screen. With `flat` enabled
+            // Android rotates the bitmap together with the map camera, which
+            // makes the head point sideways/down whenever the map turns.
+            flat={false}
             rotation={markerRotation(ownLocation, navigationActive, headingRef)}
              tracksViewChanges
           >
