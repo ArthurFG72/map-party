@@ -1,0 +1,67 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'mobile/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/ios-unsigned-ipa.yml'
+
+jobs:
+  build-ios-unsigned:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate iOS project
+        working-directory: mobile
+        run: npx expo prebuild --platform ios --non-interactive
+
+      - name: Build unsigned device app
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_SERVER_URL: https://18-228-44-32.sslip.io
+        run: |
+          xcodebuild \
+            -workspace ios/vgalvao.xcworkspace \
+            -scheme vgalvao \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ios/build-unsigned \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find ios/build-unsigned/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -type d | head -n 1)"
+          test -n "$APP_PATH"
+          rm -rf ipa-payload map-party-ios-unsigned.ipa
+          mkdir -p ipa-payload/Payload
+          cp -R "$APP_PATH" ipa-payload/Payload/
+          (cd ipa-payload && zip -qry ../map-party-ios-unsigned.ipa Payload)
+          file map-party-ios-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-party-ios-unsigned-ipa
+          path: mobile/map-party-ios-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
