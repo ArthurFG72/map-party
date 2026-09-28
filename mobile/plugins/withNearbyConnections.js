@@ -13,10 +13,10 @@ function findByComment(section, name) {
 function ensurePackage(project) {
   const objects = project.hash.project.objects;
   const projectSection = objects.PBXProject;
-  const targetSection = objects.PBXNativeTarget;
   const firstProject = project.getFirstProject();
   const projectUuid = firstProject.uuid;
-  const target = project.pbxTargetByName(project.getFirstTarget().name);
+  const firstTarget = project.getFirstTarget();
+  const target = firstTarget?.firstTarget;
   if (!target) throw new Error('Map Party iOS target not found while adding Nearby Connections.');
 
   objects.XCRemoteSwiftPackageReference ||= {};
