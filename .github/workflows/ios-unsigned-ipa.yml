@@ -37,6 +37,17 @@ jobs:
         working-directory: mobile
         run: npx expo prebuild --platform ios --non-interactive
 
+      - name: Verify native iOS transport autolinking
+        working-directory: mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx expo-modules-autolinking search --platform ios --json > "$RUNNER_TEMP/autolinking-ios.json"
+          grep -q 'map-party-local-transport' "$RUNNER_TEMP/autolinking-ios.json"
+          PLIST="$(find ios -name Info.plist -print -quit)"
+          test -n "$PLIST"
+          grep -q 'NSBonjourServices' "$PLIST"
+
       - name: Build unsigned device app
         working-directory: mobile
         env:
