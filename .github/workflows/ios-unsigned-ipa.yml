@@ -38,9 +38,12 @@ jobs:
         env:
           EXPO_PUBLIC_SERVER_URL: https://18-228-44-32.sslip.io
         run: |
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          test -n "$WORKSPACE"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
           xcodebuild \
-            -workspace ios/vgalvao.xcworkspace \
-            -scheme vgalvao \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath ios/build-unsigned \
