@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-ios-unsigned:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -26,8 +26,12 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Verify Xcode toolchain
-        run: xcodebuild -version
+      - name: Select compatible Xcode toolchain
+        run: |
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          fi
+          xcodebuild -version
 
       - name: Generate iOS project
         working-directory: mobile
