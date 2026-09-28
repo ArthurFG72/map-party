@@ -8,6 +8,7 @@ plugins.push([
   { androidGoogleMapsApiKey: googleMapsApiKey }
 ]);
 plugins.push('@maplibre/maplibre-react-native');
+plugins.push('./plugins/withNearbyConnections');
 
 module.exports = {
   ...appJson,
