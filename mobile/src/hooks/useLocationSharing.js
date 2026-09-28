@@ -69,7 +69,11 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       // Expo Go supports foreground GPS only; native builds keep background tracking.
       const supportsBackgroundLocation = Constants.appOwnership !== 'expo';
       if (shareLocation && supportsBackgroundLocation) {
-        try {
+        // Do not block foreground GPS on the iOS "Always" permission dialog.
+        // The live party marker must start publishing as soon as the user has
+        // granted foreground location; background tracking is best-effort.
+        void (async () => {
+          try {
           const currentBackgroundPermission = await Location.getBackgroundPermissionsAsync();
           const backgroundPermission = currentBackgroundPermission.status === 'granted'
             ? currentBackgroundPermission
@@ -91,11 +95,12 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
                 notificationBody: 'Sua rota e localização continuam sendo acompanhadas.'
               };
             }
-            await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, backgroundOptions);
+            if (mounted) await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, backgroundOptions);
           }
-        } catch {
-          // Foreground GPS remains available when background permission is declined.
-        }
+          } catch {
+            // Foreground GPS remains available when background permission is declined.
+          }
+        })();
       }
       setStatus('Localização ativa');
       subscription = await Location.watchPositionAsync({
