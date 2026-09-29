@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text as NativeText, TextInput, useWindowDimensions, View } from 'react-native';
-import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { askAssistant, calculateRoute, fetchEmergencyPublicKey, prepareOfflineGraph, searchNearbyPois, searchPlaces, searchPois } from '../api';
 import { createSealedEmergencyPacket } from '../emergencyPacket';
@@ -1293,8 +1293,9 @@ export default function PartyScreen({ session, onLeave }) {
        <MapView
         ref={mapRef}
         style={styles.map}
-         initialRegion={INITIAL_REGION}
-         mapType={Platform.OS === 'android' ? 'none' : undefined}
+        initialRegion={INITIAL_REGION}
+         provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : undefined}
+         mapType={Platform.OS === 'android' ? 'none' : 'standard'}
          minZoomLevel={2}
          maxZoomLevel={19}
          rotateEnabled
