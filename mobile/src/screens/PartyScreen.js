@@ -1371,15 +1371,15 @@ export default function PartyScreen({ session, onLeave }) {
           </Marker>;
         })}
       </MapView>
-      <View
-       pointerEvents="box-only"
-       {...speedBubbleResponder.panHandlers}
-         accessibilityLabel={`Velocidade atual ${formatSpeedValue(location.position)} quilômetros por hora. Segure e arraste para reposicionar.`}
-         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
-       >
-         <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position)}</Text>
-         <Text style={styles.speedBubbleUnit}>km/h</Text>
-       </View>
+      {navigationActive && <View
+        pointerEvents="box-only"
+        {...speedBubbleResponder.panHandlers}
+        accessibilityLabel={`Velocidade atual ${formatSpeedValue(location.position)} quilômetros por hora. Segure e arraste para reposicionar.`}
+        style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
+      >
+        <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position)}</Text>
+        <Text style={styles.speedBubbleUnit}>km/h</Text>
+      </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
         <View style={styles.navigationCardText}>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
