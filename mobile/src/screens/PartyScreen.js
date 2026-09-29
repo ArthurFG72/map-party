@@ -25,10 +25,9 @@ import { connectivityLabel, CONNECTIVITY_LEVEL } from '../connectivity';
 // visible eagle asset already bundled with the app icon.
 const EAGLE_MARKER_IMAGE = require('../../assets/eagle-app-icon.png');
 const EAGLE_MARKER_ANCHOR = Platform.OS === 'android' ? { x: 0.5, y: 50 / 88 } : undefined;
-// MapKit positions the custom annotation view by its full measured frame. The
-// eagle artwork is slightly to the right of the route at that origin, so keep
-// the iOS correction limited to the annotation position.
-const EAGLE_MARKER_CENTER_OFFSET = Platform.OS === 'ios' ? { x: -18, y: -6 } : undefined;
+// MapKit anchors custom marker views at their center. The GPS coordinate must
+// land on the bottom-center of the eagle, not on the center of its 44x50 view.
+const EAGLE_MARKER_CENTER_OFFSET = Platform.OS === 'ios' ? { x: 0, y: -25 } : undefined;
 
 function decodeMojibake(value) {
   const text = String(value ?? '');
@@ -1337,7 +1336,7 @@ export default function PartyScreen({ session, onLeave }) {
           if (!ownLocation) return null;
           return <Marker
             key="self-location-eagle-view"
-            coordinate={markerCoordinate(ownMarkerLocation, ownParticipantId, party.participants, true)}
+            coordinate={markerCoordinate(Platform.OS === 'ios' ? ownLocation : ownMarkerLocation, ownParticipantId, party.participants, true)}
             title={session.name}
             accessibilityLabel={`${session.name}, sua localização`}
             // The geographic point is the bottom-center of the eagle image.
@@ -1359,7 +1358,7 @@ export default function PartyScreen({ session, onLeave }) {
           const statusText = participantStatusText(participantStatuses.get(item.id));
           return <Marker
             key={item.id}
-            coordinate={markerCoordinate(visualRoutePosition(displayedRoute, item.location), item.id, party.participants, Boolean(displayedRoute))}
+            coordinate={markerCoordinate(Platform.OS === 'ios' ? item.location : visualRoutePosition(displayedRoute, item.location), item.id, party.participants, Boolean(displayedRoute))}
             tracksViewChanges
             anchor={EAGLE_MARKER_ANCHOR}
             centerOffset={EAGLE_MARKER_CENTER_OFFSET}
