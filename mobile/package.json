@@ -28,6 +28,7 @@
     "expo-speech-recognition": "^57.1.0",
     "expo-sqlite": "~57.0.2",
     "expo-updates": "~57.0.22",
+    "map-party-local-transport": "file:./modules/map-party-local-transport",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "react-native-maps": "1.27.2",
