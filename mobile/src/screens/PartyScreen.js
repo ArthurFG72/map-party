@@ -753,8 +753,10 @@ export default function PartyScreen({ session, onLeave }) {
         await submitAssistantToCloud(text);
         return;
       } catch {
-        // A provider timeout, missing key or transient outage must keep the
-        // short local command path available, especially on 3G/2G recovery.
+        const reply = 'Não consegui conectar ao assistente agora. Tente falar novamente ou use um comando de navegação curto.';
+        setAssistantReply(reply);
+        await speakAssistantText(reply);
+        return;
       }
     }
     const intent = localIntent;
@@ -1450,21 +1452,14 @@ export default function PartyScreen({ session, onLeave }) {
           </Pressable>
         </View>
         {!!(assistantReply || speechAssistant.error) && <Text accessibilityLiveRegion="polite" style={styles.assistantReply}>{speechAssistant.error || assistantReply}</Text>}
-        <View accessibilityRole="radiogroup" accessibilityLabel="Estilo do mapa" style={styles.mapStyleOptions}>
-          {['simple', 'detailed'].map((style) => {
-            const selected = mapStyle === style;
-            return <Pressable
-              key={style}
-              accessibilityRole="radio"
-              accessibilityState={{ selected }}
-              accessibilityLabel={style === 'simple' ? 'Mapa simples, sem destaque de avenidas' : 'Mapa detalhado'}
-              onPress={() => setMapStyle(style)}
-              style={[styles.mapStyleButton, selected && styles.mapStyleButtonActive]}
-            >
-              <Text style={[styles.mapStyleText, selected && styles.mapStyleTextActive]}>{style === 'simple' ? 'Simples' : 'Detalhado'}</Text>
-            </Pressable>;
-          })}
-        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Estilo do mapa: ${mapStyle === 'simple' ? 'simples' : 'detalhado'}. Toque para alternar.`}
+          onPress={() => setMapStyle((current) => current === 'simple' ? 'detailed' : 'simple')}
+          style={styles.mapStyleToggle}
+        >
+          <Text style={styles.mapStyleToggleText}>Mapa: {mapStyle === 'simple' ? 'Simples' : 'Detalhado'}</Text>
+        </Pressable>
         {query.trim().length > 0 && results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="always" nestedScrollEnabled>
           <Text accessibilityLiveRegion="polite" style={styles.resultsCount}>{results.length} resultado{results.length === 1 ? '' : 's'}</Text>
           {results.map((result) => {
@@ -1594,7 +1589,7 @@ export default function PartyScreen({ session, onLeave }) {
             <Text style={styles.permissionWarningButtonText}>Permitir</Text>
           </Pressable>
         </View>}
-        <View style={styles.sharingRow}>
+        <View style={[styles.sharingRow, styles.hidden]}>
           <View style={[styles.sharingDot, !party.locationSharingEnabled && styles.sharingDotPaused]} />
           <Text style={styles.sharingText}>{party.locationSharingEnabled ? 'Sua localização está sendo compartilhada' : 'Compartilhamento de localização pausado'}</Text>
           <Pressable accessibilityRole="button" accessibilityLabel={`${party.locationSharingEnabled ? 'Pausar' : 'Retomar'} compartilhamento de localização`} accessibilityState={{ checked: party.locationSharingEnabled }} onPress={toggleLocationSharing} style={({ pressed }) => [styles.sharingButton, !party.locationSharingEnabled && styles.sharingButtonResume, pressed && styles.pressed]}>
@@ -1615,6 +1610,13 @@ export default function PartyScreen({ session, onLeave }) {
           <Pressable accessibilityRole="button" accessibilityLabel="Enviar SOS criptografado" accessibilityState={{ disabled: sosSending, busy: sosSending }} disabled={sosSending} onPress={sendSos} style={[styles.sosButton, (!navigationRoute || navigationActive) && styles.sosButtonSolo, sosSending && styles.disabled]}>
             <Text maxFontSizeMultiplier={1.1} style={styles.sosButtonText}>{sosSending ? 'Enviando...' : 'SOS'}</Text>
           </Pressable>
+          <View style={styles.sharingInline}>
+            <View style={[styles.sharingDot, !party.locationSharingEnabled && styles.sharingDotPaused]} />
+            <Text numberOfLines={1} style={styles.sharingText}>{party.locationSharingEnabled ? 'Posição ativa' : 'Posição pausada'}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${party.locationSharingEnabled ? 'Pausar' : 'Retomar'} compartilhamento de localização`} onPress={toggleLocationSharing} style={({ pressed }) => [styles.sharingButton, !party.locationSharingEnabled && styles.sharingButtonResume, pressed && styles.pressed]}>
+              <Text style={[styles.sharingButtonText, !party.locationSharingEnabled && styles.sharingButtonTextResume]}>{party.locationSharingEnabled ? 'Pausar' : 'Retomar'}</Text>
+            </Pressable>
+          </View>
         </View>
         <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline || !party.locationSharingEnabled) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : party.locationSharingEnabled ? location.status : 'Compartilhamento pausado; movimento e GPS foram interrompidos.')}</Text>
         <Text onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright')} style={styles.attribution}>Busca: © contribuidores OpenStreetMap · rotas: OSRM</Text>
@@ -1690,7 +1692,7 @@ const styles = StyleSheet.create({
   assistantRow: { minHeight: 43, marginTop: 7, paddingHorizontal: 10, borderRadius: 22, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', flexDirection: 'row', alignItems: 'center' }, assistantIcon: { color: '#2563eb', fontSize: 16, marginRight: 6 }, assistantInput: { flex: 1, height: 40, color: '#0f172a', fontSize: 11 }, assistantMicButton: { width: 32, height: 32, marginLeft: 4, borderRadius: 16, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, assistantMicButtonActive: { backgroundColor: '#fecaca' }, assistantMicText: { color: '#1d4ed8', fontSize: 14 }, assistantButton: { minHeight: 31, paddingHorizontal: 9, borderRadius: 15, backgroundColor: '#2563eb', alignItems: 'center', justifyContent: 'center' }, assistantButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, assistantReply: { marginTop: 5, paddingHorizontal: 10, color: '#1e3a8a', fontSize: 10, fontWeight: '700' },
   searchIcon: { color: '#475569', fontSize: 24, marginRight: 8 }, floatingInput: { flex: 1, height: 48, color: '#0f172a', fontSize: 15 },
   clearSearchButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, clearSearch: { color: '#64748b', fontSize: 25, lineHeight: 28 }, floatingSearchButton: { color: '#1a73e8', fontSize: 13, fontWeight: '800', paddingVertical: 12 },
-  mapStyleOptions: { alignSelf: 'flex-start', flexDirection: 'row', marginTop: 7, padding: 3, borderRadius: 17, backgroundColor: 'rgba(15, 23, 42, 0.86)', gap: 3 },
+  mapStyleOptions: { alignSelf: 'flex-start', flexDirection: 'row', marginTop: 7, padding: 3, borderRadius: 17, backgroundColor: 'rgba(15, 23, 42, 0.86)', gap: 3 }, mapStyleToggle: { alignSelf: 'flex-start', marginTop: 6, minHeight: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: 'rgba(15, 23, 42, 0.86)', justifyContent: 'center' }, mapStyleToggleText: { color: '#e2e8f0', fontSize: 10, fontWeight: '800' },
   mapStyleButton: { minHeight: 30, paddingHorizontal: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, mapStyleButtonActive: { backgroundColor: '#fff' },
   mapStyleText: { color: '#e2e8f0', fontSize: 11, fontWeight: '800' }, mapStyleTextActive: { color: '#0f172a' },
   floatingResults: { maxHeight: 310, marginTop: 7, backgroundColor: '#fff', borderRadius: 14, shadowColor: '#0f172a', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 5 },
@@ -1731,7 +1733,7 @@ const styles = StyleSheet.create({
   people: { alignItems: 'center', gap: 6, paddingBottom: 7 }, peopleCount: { color: '#475569', fontSize: 10, fontWeight: '700' }, directMessageRow: { marginHorizontal: 14, marginTop: 8, padding: 7, borderRadius: 12, backgroundColor: '#e0f2fe', flexDirection: 'row', alignItems: 'center', gap: 6 }, directMessageTarget: { color: '#0c4a6e', fontSize: 10, fontWeight: '800' }, directMessageInput: { flex: 1, minHeight: 34, paddingHorizontal: 8, borderRadius: 8, backgroundColor: '#fff', color: '#0f172a', fontSize: 11 }, directMessageButton: { minHeight: 34, paddingHorizontal: 9, borderRadius: 8, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, directMessageButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, directMessageClose: { paddingHorizontal: 4 }, directMessageCloseText: { color: '#0c4a6e', fontSize: 20 },
   personChip: { minHeight: 38, flexDirection: 'row', alignItems: 'center', backgroundColor: '#f1f5f9', borderRadius: 11, paddingHorizontal: 8, paddingVertical: 4 },
   personDot: { width: 7, height: 7, borderRadius: 4, marginRight: 6 }, personName: { fontSize: 10, color: '#334155', fontWeight: '800' }, personMeta: { marginTop: 1, color: '#64748b', fontSize: 8 },
-  sharingRow: { minHeight: 46, marginBottom: 9, paddingLeft: 10, paddingRight: 4, borderRadius: 12, backgroundColor: '#f8fafc', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sharingRow: { minHeight: 46, marginBottom: 9, paddingLeft: 10, paddingRight: 4, borderRadius: 12, backgroundColor: '#f8fafc', flexDirection: 'row', alignItems: 'center', gap: 8 }, sharingInline: { flex: 1, minHeight: 36, paddingHorizontal: 7, borderRadius: 10, backgroundColor: '#f8fafc', flexDirection: 'row', alignItems: 'center', gap: 5 }, hidden: { display: 'none' },
   permissionWarning: { minHeight: 46, marginBottom: 8, paddingLeft: 10, paddingRight: 4, borderRadius: 12, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', flexDirection: 'row', alignItems: 'center', gap: 8 }, permissionWarningText: { flex: 1, color: '#9a3412', fontSize: 10, fontWeight: '800' }, permissionWarningButton: { minHeight: 36, paddingHorizontal: 11, borderRadius: 9, backgroundColor: '#ea580c', alignItems: 'center', justifyContent: 'center' }, permissionWarningButtonText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   sharingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#16a34a' }, sharingDotPaused: { backgroundColor: '#f59e0b' }, sharingText: { flex: 1, color: '#475569', fontSize: 10, fontWeight: '700' },
   sharingButton: { minWidth: 72, minHeight: 40, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }, sharingButtonResume: { backgroundColor: '#dcfce7' }, sharingButtonText: { color: '#b91c1c', fontSize: 11, fontWeight: '900' }, sharingButtonTextResume: { color: '#166534' },
@@ -1739,7 +1741,7 @@ const styles = StyleSheet.create({
   originActive: { backgroundColor: '#16a34a' }, destinationActive: { backgroundColor: '#dc2626' }, segmentText: { color: '#334155', fontSize: 13, fontWeight: '700' }, activeText: { color: '#fff' },
   locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },
   result: { padding: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1' }, resultText: { color: '#334155', fontSize: 12, lineHeight: 17 }, disabled: { opacity: 0.45 },
-  routeSummary: { marginTop: 7, color: '#1e40af', fontSize: 11, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 8, marginTop: 8 }, startNavigation: { flex: 1, minHeight: 42, borderRadius: 11, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, startNavigationText: { color: '#fff', fontSize: 12, fontWeight: '900' }, sosButton: { flex: 1, minHeight: 42, borderRadius: 11, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' }, sosButtonSolo: { flex: 1 }, sosButtonText: { color: '#fff', fontSize: 13, fontWeight: '900' }, message: { marginTop: 6, color: '#64748b', fontSize: 10 }, warning: { color: '#b45309' },
+  routeSummary: { marginTop: 7, color: '#1e40af', fontSize: 11, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 }, startNavigation: { flex: 1, minHeight: 38, borderRadius: 10, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, startNavigationText: { color: '#fff', fontSize: 12, fontWeight: '900' }, sosButton: { width: 52, minWidth: 52, minHeight: 36, borderRadius: 9, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' }, sosButtonSolo: { width: 60 }, sosButtonText: { color: '#fff', fontSize: 12, fontWeight: '900' }, message: { marginTop: 6, color: '#64748b', fontSize: 10 }, warning: { color: '#b45309' },
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
   pressed: { opacity: 0.72 }
 });
