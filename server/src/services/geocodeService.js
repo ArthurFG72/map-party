@@ -97,6 +97,7 @@ function distanceBetween(first, second) {
 export function createGeocodeService({
   baseUrl = process.env.GEOCODER_BASE_URL || 'https://nominatim.openstreetmap.org',
   overpassBaseUrl = process.env.OVERPASS_BASE_URL || 'https://overpass-api.de/api/interpreter',
+  overpassFallbackUrl = process.env.OVERPASS_FALLBACK_URL || 'https://overpass.kumi.systems/api/interpreter',
   userAgent = process.env.GEOCODER_USER_AGENT || 'MapParty/1.0 (local-development)',
   fetchImpl = fetch,
   cache = new TtlLruCache(),
@@ -173,16 +174,18 @@ export function createGeocodeService({
               : `(around:10000,${normalizedCenter.lat},${normalizedCenter.lng})`;
             const overpassQuery = `[out:json][timeout:15];nwr["name"~"${searchText}",i]${area};out center tags;`;
             try {
-              const overpassResponse = await fetchImpl(overpassUrl, {
-                method: 'POST',
-                headers: { Accept: 'application/json', 'Content-Type': 'text/plain', 'User-Agent': userAgent },
-                body: overpassQuery,
-                signal: controller.signal
-              });
-              if (overpassResponse.ok) {
+              for (const provider of [...new Set([overpassUrl.toString(), overpassFallbackUrl])]) {
+                const overpassResponse = await fetchImpl(provider, {
+                  method: 'POST',
+                  headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': userAgent },
+                  body: new URLSearchParams({ data: overpassQuery }),
+                  signal: controller.signal
+                });
+                if (!overpassResponse.ok) continue;
                 const overpassPayload = await overpassResponse.json();
                 results = (Array.isArray(overpassPayload?.elements) ? overpassPayload.elements : [])
                   .map((item) => cleanOverpassResult(item, normalizedCenter)).filter(Boolean);
+                break;
               }
             } catch {
               // Nominatim remains the authoritative fallback when Overpass is unavailable.

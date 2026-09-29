@@ -47,7 +47,7 @@ test('busca nomes locais no Overpass quando o Nominatim não retorna endereço',
     minIntervalMs: 0,
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
-      if (url.hostname.includes('nominatim')) return { ok: true, json: async () => [] };
+      if (new URL(url).hostname.includes('nominatim')) return { ok: true, json: async () => [] };
       return { ok: true, json: async () => ({ elements: [{ type: 'node', id: 42, lat: -18.9, lon: -48.2, tags: { name: 'Yes Vida Boa', amenity: 'place' } }] }) };
     }
   });
@@ -55,7 +55,7 @@ test('busca nomes locais no Overpass quando o Nominatim não retorna endereço',
   assert.equal(result.results[0].label, 'Yes Vida Boa');
   assert.equal(result.results[0].id, 'overpass:node:42');
   assert.equal(calls.length, 3);
-  assert.match(calls[2].options.body, /Yes.*Vida.*Boa/i);
+  assert.match(calls[2].options.body.get('data'), /Yes.*Vida.*Boa/i);
 });
 
 test('serviço de rotas valida a solicitação e a resposta do provedor', async () => {
