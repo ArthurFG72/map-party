@@ -24,6 +24,10 @@ import { connectivityLabel, CONNECTIVITY_LEVEL } from '../connectivity';
 // The native marker PNG was fully transparent on iOS. Reuse the verified
 // visible eagle asset already bundled with the app icon.
 const EAGLE_MARKER_IMAGE = require('../../assets/eagle-app-icon.png');
+const EAGLE_MARKER_ANCHOR = Platform.OS === 'android' ? { x: 0.5, y: 50 / 88 } : undefined;
+// Apple Maps uses centerOffset for MapKit annotation views; anchor is for the
+// Google Maps implementation and is ignored by the default iOS provider.
+const EAGLE_MARKER_CENTER_OFFSET = Platform.OS === 'ios' ? { x: 0, y: -6 } : undefined;
 
 function decodeMojibake(value) {
   const text = String(value ?? '');
@@ -91,10 +95,10 @@ function MapPin({ color, label }) {
   </View>;
 }
 
-function EagleMarker({ name, estimated = false }) {
+function EagleMarker({ name, estimated = false, labelBelow = false }) {
   return <View style={[styles.eagleMarker, estimated && styles.eagleMarkerEstimated]}>
     <Image source={EAGLE_MARKER_IMAGE} resizeMode="contain" style={styles.eagleMarkerImage} />
-    <View style={styles.personLabel}>
+    <View style={[styles.personLabel, labelBelow && styles.personLabelBelow]}>
       <Text allowFontScaling={false} numberOfLines={1} style={styles.personLabelText}>{name}</Text>
     </View>
   </View>;
@@ -108,7 +112,7 @@ function markerCoordinate(location, participantId, participants, exact = false) 
   const slot = peers.findIndex((item) => item.id === participantId);
   if (slot <= 0) return { latitude: location.lat, longitude: location.lng };
   const angle = (slot * Math.PI * 2) / peers.length;
-  const offset = 0.00012;
+  const offset = 0.00025;
   return {
     latitude: location.lat + Math.cos(angle) * offset,
     longitude: location.lng + Math.sin(angle) * offset
@@ -1247,7 +1251,9 @@ export default function PartyScreen({ session, onLeave }) {
         style={styles.map}
          initialRegion={INITIAL_REGION}
          mapType={Platform.OS === 'android' ? 'none' : undefined}
-        rotateEnabled
+         minZoomLevel={2}
+         maxZoomLevel={19}
+         rotateEnabled
         pitchEnabled={false}
         showsCompass={false}
         showsUserLocation={false}
@@ -1322,7 +1328,8 @@ export default function PartyScreen({ session, onLeave }) {
             // The geographic point is the bottom-center of the eagle image.
             // Keep the name label out of the marker frame so MapKit and Google
             // Maps calculate the same anchor on both native platforms.
-            anchor={{ x: 0.5, y: 1 }}
+            anchor={EAGLE_MARKER_ANCHOR}
+            centerOffset={EAGLE_MARKER_CENTER_OFFSET}
             // Keep the eagle billboarded to the screen. With `flat` enabled
             // Android rotates the bitmap together with the map camera, which
             // makes the head point sideways/down whenever the map turns.
@@ -1339,12 +1346,13 @@ export default function PartyScreen({ session, onLeave }) {
             key={item.id}
             coordinate={markerCoordinate(visualRoutePosition(displayedRoute, item.location), item.id, party.participants, Boolean(displayedRoute))}
             tracksViewChanges
-            anchor={{ x: 0.5, y: 1 }}
+            anchor={EAGLE_MARKER_ANCHOR}
+            centerOffset={EAGLE_MARKER_CENTER_OFFSET}
             title={item.name}
             description={`${statusText}${item.location.estimated ? ' · posição estimada' : ''}`}
             accessibilityLabel={`${item.name}, ${statusText}${item.location.estimated ? ', posição estimada' : ''}`}
           >
-            <EagleMarker name={item.name} estimated={item.location.estimated} />
+            <EagleMarker name={item.name} estimated={item.location.estimated} labelBelow />
           </Marker>;
         })}
       </MapView>
@@ -1691,8 +1699,10 @@ const styles = StyleSheet.create({
   recenterIcon: { color: '#2563eb', fontSize: 27, fontWeight: '700', lineHeight: 30 },
   pin: { width: 34, height: 34, borderRadius: 17, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
   pinText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-  eagleMarker: { width: 44, height: 50, alignItems: 'center', justifyContent: 'flex-start', overflow: 'visible' }, eagleMarkerEstimated: { opacity: 0.58 }, eagleMarkerImage: { width: 38, height: 50 },
-  personLabel: { position: 'absolute', top: 50, left: -44, width: 132, alignItems: 'center', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.94)' }, personLabelText: { color: '#0f172a', fontSize: 9, fontWeight: '800' },
+  // Keep the name inside the native marker bitmap. Android clips custom marker
+  // content outside the measured view even when React Native allows overflow.
+  eagleMarker: { width: 132, height: 88, alignItems: 'center', justifyContent: 'flex-start' }, eagleMarkerEstimated: { opacity: 0.58 }, eagleMarkerImage: { position: 'absolute', top: 0, width: 38, height: 50 },
+  personLabel: { position: 'absolute', top: 50, left: 0, zIndex: 10, elevation: 10, width: 132, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderRadius: 4, backgroundColor: '#ffffff' }, personLabelBelow: { top: 70 }, personLabelText: { color: '#0f172a', fontSize: 9, fontWeight: '800' },
   clusterMarker: { minWidth: 44, height: 44, paddingHorizontal: 9, borderRadius: 22, borderWidth: 3, borderColor: '#fff', backgroundColor: '#1d4ed8', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
   clusterMarkerText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   poiMarker: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.22, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 }, poiMarkerIcon: { fontSize: 16 },
