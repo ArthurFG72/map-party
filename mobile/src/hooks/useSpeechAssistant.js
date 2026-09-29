@@ -9,9 +9,30 @@ function readableSpeechError(event) {
   const value = String(detail || '').trim();
   const normalized = value.toLowerCase();
   if (normalized === 'bad request' || normalized.includes('bad request')) return 'O serviço de voz recusou esta tentativa. Verifique a conexão e tente falar novamente.';
+  if (normalized.includes('service-not-allowed') || normalized.includes('language-not-supported')) return 'O reconhecimento de voz não está disponível no iPhone. Ative Siri e Ditado e tente novamente.';
+  if (normalized.includes('no-speech')) return 'Não ouvi uma frase. Fale novamente após tocar no microfone.';
   if (normalized.includes('network') || normalized.includes('internet')) return 'O reconhecimento de voz precisa de conexão. Tente novamente quando a rede estabilizar.';
   if (normalized.includes('permission') || normalized.includes('not allowed')) return 'Permita o microfone e o reconhecimento de voz nas configurações.';
   return value || 'Não foi possível reconhecer a fala.';
+}
+
+function recognitionOptions(voiceMode) {
+  return {
+    lang: 'pt-BR',
+    interimResults: voiceMode.interimResults,
+    continuous: voiceMode.continuous,
+    ...(Platform.OS === 'ios'
+      ? {
+          iosTaskHint: 'search',
+          iosCategory: {
+            category: 'playAndRecord',
+            categoryOptions: ['defaultToSpeaker', 'allowBluetooth'],
+            mode: 'measurement'
+          },
+          iosVoiceProcessingEnabled: true
+        }
+      : { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } })
+  };
 }
 
 export function useSpeechAssistant({ onFinalTranscript, connectivityLevel = CONNECTIVITY_LEVEL.RICH }) {
@@ -39,12 +60,7 @@ export function useSpeechAssistant({ onFinalTranscript, connectivityLevel = CONN
       restartTimerRef.current = setTimeout(() => {
         restartTimerRef.current = null;
         if (!keepSessionRef.current) return;
-        Promise.resolve(nativeModule.start({
-          lang: 'pt-BR',
-          interimResults: voiceModeRef.current.interimResults,
-          continuous: voiceModeRef.current.continuous,
-          ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
-        })).then(() => {
+        Promise.resolve(nativeModule.start(recognitionOptions(voiceModeRef.current))).then(() => {
           restartAttemptRef.current = 0;
         }).catch(() => {
           if (keepSessionRef.current) restart();
@@ -102,12 +118,12 @@ export function useSpeechAssistant({ onFinalTranscript, connectivityLevel = CONN
         setError('Permita o microfone e o reconhecimento de voz para falar com o assistente.');
         return false;
       }
-      await nativeModule.start({
-        lang: 'pt-BR',
-        interimResults: voiceMode.interimResults,
-        continuous: voiceMode.continuous,
-        ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
-      });
+      if (typeof nativeModule.isRecognitionAvailable === 'function' && !nativeModule.isRecognitionAvailable()) {
+        setError('O reconhecimento de voz não está disponível no aparelho. Ative Siri e Ditado e tente novamente.');
+        keepSessionRef.current = false;
+        return false;
+      }
+      await nativeModule.start(recognitionOptions(voiceMode));
       return true;
     } catch (error) {
       keepSessionRef.current = false;
