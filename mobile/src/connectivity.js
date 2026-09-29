@@ -36,6 +36,11 @@ export function connectivityCapabilities(level) {
   };
 }
 
+export function voiceCapabilities(level) {
+  const continuous = level === CONNECTIVITY_LEVEL.NORMAL || level === CONNECTIVITY_LEVEL.RICH;
+  return { continuous, interimResults: continuous, allowRecognition: true };
+}
+
 export function connectivityLabel(level) {
   return {
     [CONNECTIVITY_LEVEL.OFFLINE]: 'Sem internet — usando dados salvos',

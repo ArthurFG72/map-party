@@ -232,7 +232,7 @@ export default function PartyScreen({ session, onLeave }) {
   const [directSending, setDirectSending] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState('');
   const [assistantReply, setAssistantReply] = useState('');
-  const speechAssistant = useSpeechAssistant({ onFinalTranscript: (text) => submitAssistant(text) });
+  const speechAssistant = useSpeechAssistant({ onFinalTranscript: (text) => submitAssistant(text), connectivityLevel: party.connectivity.level });
   const [routeSharePickerVisible, setRouteSharePickerVisible] = useState(false);
   const [routeShareSelection, setRouteShareSelection] = useState(() => new Set());
   const [authorizedRouteParticipantIds, setAuthorizedRouteParticipantIds] = useState(() => new Set());

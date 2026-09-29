@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
+import { CONNECTIVITY_LEVEL, voiceCapabilities } from '../connectivity';
 
 function readableSpeechError(event) {
   const raw = event?.message ?? event?.detail ?? event?.error;
@@ -13,7 +14,7 @@ function readableSpeechError(event) {
   return value || 'Não foi possível reconhecer a fala.';
 }
 
-export function useSpeechAssistant({ onFinalTranscript }) {
+export function useSpeechAssistant({ onFinalTranscript, connectivityLevel = CONNECTIVITY_LEVEL.RICH }) {
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState('');
@@ -22,14 +23,17 @@ export function useSpeechAssistant({ onFinalTranscript }) {
   const restartTimerRef = useRef(null);
   const restartAttemptRef = useRef(0);
   const startInFlightRef = useRef(false);
+  const voiceMode = voiceCapabilities(connectivityLevel);
+  const voiceModeRef = useRef(voiceMode);
   const callbackRef = useRef(onFinalTranscript);
+  voiceModeRef.current = voiceMode;
   const nativeModule = useMemo(() => requireOptionalNativeModule('ExpoSpeechRecognition'), []);
   callbackRef.current = onFinalTranscript;
   useEffect(() => {
     if (!nativeModule) return undefined;
     const emitter = new EventEmitter(nativeModule);
     const restart = () => {
-      if (!keepSessionRef.current || processingRef.current || restartTimerRef.current) return;
+      if (!voiceModeRef.current.continuous || !keepSessionRef.current || processingRef.current || restartTimerRef.current) return;
       const delay = Math.min(1_200, 350 + restartAttemptRef.current * 150);
       restartAttemptRef.current += 1;
       restartTimerRef.current = setTimeout(() => {
@@ -37,8 +41,8 @@ export function useSpeechAssistant({ onFinalTranscript }) {
         if (!keepSessionRef.current) return;
         Promise.resolve(nativeModule.start({
           lang: 'pt-BR',
-          interimResults: true,
-          continuous: true,
+          interimResults: voiceModeRef.current.interimResults,
+          continuous: voiceModeRef.current.continuous,
           ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
         })).then(() => {
           restartAttemptRef.current = 0;
@@ -51,7 +55,8 @@ export function useSpeechAssistant({ onFinalTranscript }) {
       emitter.addListener('start', () => setListening(true)),
       emitter.addListener('end', () => {
         if (!keepSessionRef.current) setListening(false);
-        else restart();
+        else if (voiceModeRef.current.continuous) restart();
+        else setListening(false);
       }),
       emitter.addListener('result', (event) => {
         const text = event.results?.[0]?.transcript || '';
@@ -63,19 +68,20 @@ export function useSpeechAssistant({ onFinalTranscript }) {
           Promise.resolve(nativeModule.stop()).catch(() => undefined);
           Promise.resolve(callbackRef.current?.(text.trim())).then(() => undefined, () => undefined).finally(() => {
             processingRef.current = false;
-            restart();
+            if (voiceModeRef.current.continuous) restart();
           });
         }
       }),
       emitter.addListener('error', (event) => {
         setError(readableSpeechError(event));
         if (!keepSessionRef.current) setListening(false);
-        else restart();
+        else if (voiceModeRef.current.continuous) restart();
       })
     ];
     return () => {
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       restartTimerRef.current = null;
+      Promise.resolve(nativeModule.stop()).catch(() => undefined);
       subscriptions.forEach((subscription) => subscription.remove());
     };
   }, [nativeModule]);
@@ -98,8 +104,8 @@ export function useSpeechAssistant({ onFinalTranscript }) {
       }
       await nativeModule.start({
         lang: 'pt-BR',
-        interimResults: true,
-        continuous: true,
+        interimResults: voiceMode.interimResults,
+        continuous: voiceMode.continuous,
         ...(Platform.OS === 'android' ? { androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' } } : {})
       });
       return true;
@@ -111,7 +117,7 @@ export function useSpeechAssistant({ onFinalTranscript }) {
     } finally {
       startInFlightRef.current = false;
     }
-  }, [nativeModule]);
+  }, [nativeModule, voiceMode.continuous, voiceMode.interimResults]);
   const stop = useCallback(() => {
     keepSessionRef.current = false;
     processingRef.current = false;
