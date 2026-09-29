@@ -107,3 +107,9 @@ test('detecta sentido incompativel e orienta o condutor para a rota', () => {
   assert.equal(guidance.offRoute, true);
   assert.equal(guidance.instruction, 'Reoriente-se para seguir a rota azul.');
 });
+
+test('mantém a próxima manobra quando o GPS chega alguns metros fora da via', () => {
+  const guidance = buildNavigationGuidance(route, { lat: 0.00025, lng: 0.004, accuracy: 18, speed: 4, heading: 90 });
+  assert.match(guidance.instruction, /Vire .*direita na Rua B/);
+  assert.equal(guidance.offRoute, false);
+});

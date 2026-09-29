@@ -176,7 +176,11 @@ export function buildNavigationGuidance(route, location) {
   const preferredHeading = Number(location.speed) >= 2.5 && Number.isFinite(Number(location.heading))
     ? Number(location.heading)
     : null;
-  const routePosition = closestRoutePosition(coordinates, location, preferredHeading);
+  const rawRoutePosition = closestRoutePosition(coordinates, location, preferredHeading);
+  const accuracy = Number(location.accuracy);
+  const snapLimit = Number.isFinite(accuracy) ? Math.max(30, Math.min(80, accuracy * 1.5 + 20)) : 60;
+  const guidanceLocation = snapPositionToRoute(route, location, snapLimit);
+  const routePosition = closestRoutePosition(coordinates, guidanceLocation, preferredHeading);
   const directToDestination = distanceMeters(location, route.destination);
   const routeDistance = Number.isFinite(route.distance) && route.distance > 0
     ? route.distance
@@ -240,8 +244,8 @@ export function buildNavigationGuidance(route, location) {
     progress,
     remainingMeters,
     remainingSeconds,
-    offRoute: Boolean((routePosition && routePosition.distanceFromRoute > threshold) || directionMismatch),
-    offRouteDistance: routePosition?.distanceFromRoute ?? null,
+    offRoute: Boolean((rawRoutePosition && rawRoutePosition.distanceFromRoute > threshold) || directionMismatch),
+    offRouteDistance: rawRoutePosition?.distanceFromRoute ?? null,
     instruction: guidanceInstruction,
     instructionDistance,
     maneuverPoint,
