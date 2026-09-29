@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Linking } from 'react-native';
-import { EventEmitter, requireNativeModule } from 'expo-modules-core';
+import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
 import { loadPermissionPrompted, markPermissionPrompted, setActiveTrackingRoom } from '../offlineStore';
 import { stabilizePosition } from '../locationStabilization';
 
@@ -18,7 +18,12 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
   useEffect(() => {
     if (!enabled) return undefined;
     let mounted = true;
-    const native = requireNativeModule('MapPartyLocation');
+    const native = requireOptionalNativeModule('MapPartyLocation');
+    if (!native) {
+      setPermissionGranted(false);
+      setStatus('GPS nativo iOS indisponível nesta versão');
+      return undefined;
+    }
     const emitter = new EventEmitter(native);
     const subscription = emitter.addListener('onLocation', (value) => {
       const next = { lat: value.latitude, lng: value.longitude, accuracy: value.accuracy || 0, timestamp: value.timestamp || Date.now(), ...(Number.isFinite(value.speed) && value.speed >= 0 ? { speed: value.speed } : {}), ...(Number.isFinite(value.heading) && value.heading >= 0 ? { heading: value.heading } : {}) };
@@ -45,7 +50,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       if (mounted) setStatus('Localização nativa ativa');
     }
     start().catch((error) => mounted && setStatus(error?.message || 'Não foi possível iniciar o GPS nativo'));
-    return () => { mounted = false; subscription.remove(); setActiveTrackingRoom(null); native.stop().catch(() => undefined); };
+    return () => { mounted = false; subscription.remove(); setActiveTrackingRoom(null); native.stop?.().catch?.(() => undefined); };
   }, [enabled, roomId, shareLocation]);
 
   return { position, status, permissionGranted, openSettings: () => Linking.openSettings().catch(() => undefined) };

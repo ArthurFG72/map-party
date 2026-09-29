@@ -44,9 +44,11 @@ jobs:
           set -euo pipefail
           npx expo-modules-autolinking search --platform ios --json > "$RUNNER_TEMP/autolinking-ios.json"
           grep -q 'map-party-local-transport' "$RUNNER_TEMP/autolinking-ios.json"
+          grep -q 'MapPartyLocationModule' "$RUNNER_TEMP/autolinking-ios.json"
           PLIST="$(find ios -name Info.plist -print -quit)"
           test -n "$PLIST"
           grep -q 'NSBonjourServices' "$PLIST"
+          grep -R -q 'MapPartyLocationModule' ios
 
       - name: Build unsigned device app
         working-directory: mobile
