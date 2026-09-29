@@ -36,11 +36,82 @@ async function database() {
           value TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS recognition_tracks (
+          id TEXT PRIMARY KEY NOT NULL,
+          room_id TEXT NOT NULL,
+          user_name TEXT NOT NULL,
+          started_at INTEGER NOT NULL,
+          ended_at INTEGER,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS recognition_points (
+          track_id TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          lat REAL NOT NULL,
+          lng REAL NOT NULL,
+          accuracy REAL,
+          speed REAL,
+          heading REAL,
+          PRIMARY KEY (track_id, timestamp)
+        );
+        CREATE TABLE IF NOT EXISTS recognition_attention (
+          id TEXT PRIMARY KEY NOT NULL,
+          track_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          note TEXT,
+          lat REAL NOT NULL,
+          lng REAL NOT NULL,
+          created_at INTEGER NOT NULL,
+          user_name TEXT NOT NULL
+        );
       `);
       return db;
     });
   }
   return databasePromise;
+}
+
+function recognitionId(prefix = 'track') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export async function createRecognitionTrack(roomId, userName) {
+  const track = { id: recognitionId(), roomId: String(roomId || '').slice(0, 80), userName: String(userName || 'Participante').trim().slice(0, 100), startedAt: Date.now() };
+  const db = await database();
+  await db.runAsync('INSERT INTO recognition_tracks (id, room_id, user_name, started_at, updated_at) VALUES (?, ?, ?, ?, ?)', track.id, track.roomId, track.userName, track.startedAt, track.startedAt);
+  return track;
+}
+
+export async function appendRecognitionPoint(trackId, point) {
+  if (!trackId || !Number.isFinite(point?.lat) || !Number.isFinite(point?.lng) || !Number.isFinite(point?.timestamp)) return false;
+  const db = await database();
+  await db.runAsync('INSERT OR IGNORE INTO recognition_points (track_id, timestamp, lat, lng, accuracy, speed, heading) VALUES (?, ?, ?, ?, ?, ?, ?)', trackId, Math.round(point.timestamp), point.lat, point.lng, Number.isFinite(point.accuracy) ? point.accuracy : null, Number.isFinite(point.speed) ? point.speed : null, Number.isFinite(point.heading) ? point.heading : null);
+  await db.runAsync('UPDATE recognition_tracks SET updated_at = ? WHERE id = ?', Date.now(), trackId);
+  return true;
+}
+
+export async function addRecognitionAttention(trackId, point, type, note = '') {
+  if (!trackId || !Number.isFinite(point?.lat) || !Number.isFinite(point?.lng)) return null;
+  const item = { id: recognitionId('attention'), trackId, type: String(type || 'outro').slice(0, 40), note: String(note || '').slice(0, 240), lat: point.lat, lng: point.lng, createdAt: Date.now(), userName: String(point.userName || '').slice(0, 100) };
+  const db = await database();
+  await db.runAsync('INSERT INTO recognition_attention (id, track_id, type, note, lat, lng, created_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', item.id, item.trackId, item.type, item.note, item.lat, item.lng, item.createdAt, item.userName);
+  return item;
+}
+
+export async function loadRecognitionTrack(trackId) {
+  if (!trackId) return null;
+  const db = await database();
+  const track = await db.getFirstAsync('SELECT id, room_id as roomId, user_name as userName, started_at as startedAt, ended_at as endedAt FROM recognition_tracks WHERE id = ?', trackId);
+  if (!track) return null;
+  const points = await db.getAllAsync('SELECT lat, lng, accuracy, speed, heading, timestamp FROM recognition_points WHERE track_id = ? ORDER BY timestamp ASC', trackId);
+  const attentionPoints = await db.getAllAsync('SELECT id, type, note, lat, lng, created_at as createdAt, user_name as userName FROM recognition_attention WHERE track_id = ? ORDER BY created_at ASC', trackId);
+  return { ...track, points, attentionPoints };
+}
+
+export async function closeRecognitionTrack(trackId) {
+  if (!trackId) return;
+  const db = await database();
+  await db.runAsync('UPDATE recognition_tracks SET ended_at = ?, updated_at = ? WHERE id = ?', Date.now(), Date.now(), trackId);
 }
 
 async function writeState(key, value) {
@@ -58,6 +129,26 @@ async function readState(key) {
   const row = await db.getFirstAsync('SELECT value FROM offline_state WHERE key = ?', key);
   if (!row?.value) return null;
   try { return JSON.parse(row.value); } catch { return null; }
+}
+
+export async function savePendingRecognitionTrack(track) {
+  if (!track?.trackId) return false;
+  await writeState(`recognition:pending:${track.trackId}`, track);
+  return true;
+}
+
+export async function loadPendingRecognitionTracks() {
+  const db = await database();
+  const rows = await db.getAllAsync("SELECT key, value FROM offline_state WHERE key LIKE 'recognition:pending:%' ORDER BY updated_at ASC");
+  return rows.flatMap((row) => {
+    try { const value = JSON.parse(row.value); return value?.trackId ? [value] : []; } catch { return []; }
+  });
+}
+
+export async function removePendingRecognitionTrack(trackId) {
+  if (!trackId) return;
+  const db = await database();
+  await db.runAsync('DELETE FROM offline_state WHERE key = ?', `recognition:pending:${trackId}`);
 }
 
 function createParticipantToken() {

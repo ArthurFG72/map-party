@@ -12,7 +12,7 @@ import { executeNavigationCommand } from '../navigationCommandExecutor';
 import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from '../navigationVoice';
 import { assistantReplyForIntent, parseAssistantIntent } from '../assistantIntent';
 import { useSpeechAssistant } from '../hooks/useSpeechAssistant';
-import { loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
+import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
 import { calculatePackagedOfflineRoute } from '../offlineNavigation';
 import { createOfflineRoutePackage } from '../offlineRoutePackage';
 import { MAP_TILE_TEMPLATES, useOfflineRouteTiles } from '../offlineMapTiles';
@@ -215,6 +215,9 @@ export default function PartyScreen({ session, onLeave }) {
   const party = useParty(session.roomId, session.name, session.visible !== false);
 
   const [points, setPoints] = useState({ origin: null, destination: null });
+  const [recognitionTrack, setRecognitionTrack] = useState(null);
+  const [recognitionPoints, setRecognitionPoints] = useState([]);
+  const [attentionPoints, setAttentionPoints] = useState([]);
   const [localRoute, setLocalRoute] = useState(null);
   const [temporaryStop, setTemporaryStop] = useState(null);
   const [activeKind, setActiveKind] = useState('destination');
@@ -264,12 +267,39 @@ export default function PartyScreen({ session, onLeave }) {
   const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
   const speedBubbleCustomizedRef = useRef(false);
   const voiceHistoryRef = useRef({});
+  const recognitionTrackRef = useRef(null);
+  const lastRecognitionTimestampRef = useRef(0);
   const assistantHistoryRef = useRef([]);
   const categoryKey = activeCategories.join(',');
   const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
   // GPS local é necessário para busca por proximidade mesmo quando o usuário
   // optou por não compartilhar sua posição com a party.
   const location = useLocationSharing({ enabled: party.joined || navigationActive || Boolean(navigationRoute), roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  useEffect(() => {
+    let active = true;
+    if (!party.joined) return undefined;
+    createRecognitionTrack(session.roomId, session.name).then((track) => {
+      if (!active) return closeRecognitionTrack(track.id);
+      recognitionTrackRef.current = track;
+      setRecognitionTrack(track);
+      setRecognitionPoints([]);
+      setAttentionPoints([]);
+    }).catch(() => setMessage('Não foi possível iniciar o registro do percurso.'));
+    return () => {
+      active = false;
+      const trackId = recognitionTrackRef.current?.id;
+      if (trackId) closeRecognitionTrack(trackId).catch(() => undefined);
+      recognitionTrackRef.current = null;
+    };
+  }, [party.joined, session.name, session.roomId]);
+  useEffect(() => {
+    const point = location.position;
+    const trackId = recognitionTrack?.id;
+    if (!trackId || !point || point.timestamp <= lastRecognitionTimestampRef.current) return;
+    lastRecognitionTimestampRef.current = point.timestamp;
+    appendRecognitionPoint(trackId, point).catch(() => undefined);
+    setRecognitionPoints((current) => [...current.slice(-2499), point]);
+  }, [location.position, recognitionTrack]);
   const displayedRoute = navigationActive ? navigationRoute : (localRoute || party.sharedRoute || party.route);
   const offlineTileTemplate = useOfflineRouteTiles(displayedRoute);
   const ownParticipantId = party.participantId || party.participants.find((item) => item.name === session.name)?.id;
@@ -1254,7 +1284,64 @@ export default function PartyScreen({ session, onLeave }) {
     );
   }
 
+  function saveAttentionPoint(type, point) {
+    const trackId = recognitionTrackRef.current?.id;
+    if (!trackId || !point) return setMessage('Aguarde o primeiro ponto GPS do percurso.');
+    const locationPoint = { ...point, userName: session.name };
+    addRecognitionAttention(trackId, locationPoint, type).then((item) => {
+      if (!item) return;
+      setAttentionPoints((current) => [...current, item]);
+      setMessage(`Ponto marcado: ${type}.`);
+    }).catch(() => setMessage('Não foi possível salvar o ponto.'));
+  }
+
+  function chooseAttentionPoint(point = location.position) {
+    if (!point) return setMessage('Aguardando uma posição do GPS.');
+    Alert.alert('Marcar ponto de atenção', 'O que existe neste local?', [
+      { text: 'Buraco', onPress: () => saveAttentionPoint('buraco', point) },
+      { text: 'Casa/construção', onPress: () => saveAttentionPoint('casa', point) },
+      { text: 'Estrada não mapeada', onPress: () => saveAttentionPoint('estrada-nao-mapeada', point) },
+      { text: 'Outro', onPress: () => saveAttentionPoint('outro', point) },
+      { text: 'Cancelar', style: 'cancel' }
+    ]);
+  }
+
+  async function publishRecognitionTrack() {
+    const trackId = recognitionTrackRef.current?.id;
+    if (!trackId) return setMessage('O registro ainda não foi iniciado.');
+    try {
+      const track = await loadRecognitionTrack(trackId);
+      if (!track || track.points.length < 2) return setMessage('Registre pelo menos dois pontos GPS antes de publicar.');
+      const compactPoints = track.points.length > 1200 ? track.points.filter((_point, index) => index % Math.ceil(track.points.length / 1200) === 0) : track.points;
+      const payload = { trackId: track.id, userName: track.userName, startedAt: track.startedAt, endedAt: Date.now(), points: compactPoints, attentionPoints: track.attentionPoints };
+      await savePendingRecognitionTrack(payload);
+      if (!party.connected) return setMessage('Percurso salvo no aparelho. Será publicado quando a conexão voltar.');
+      await party.publishExplorationTrack(payload);
+      await removePendingRecognitionTrack(payload.trackId);
+      await Share.share({ message: `AGUIA-PERCURSO:v1\n${JSON.stringify(payload)}` });
+      setMessage(`Percurso publicado com ${compactPoints.length} pontos e ${track.attentionPoints.length} marcações.`);
+    } catch (error) { setMessage(error.message || 'Não foi possível publicar o percurso.'); }
+  }
+
+  useEffect(() => {
+    if (!party.connected || !party.joined) return undefined;
+    let active = true;
+    loadPendingRecognitionTracks().then(async (pending) => {
+      for (const payload of pending) {
+        if (!active) return;
+        try {
+          await party.publishExplorationTrack(payload);
+          await removePendingRecognitionTrack(payload.trackId);
+          if (active) setMessage(`Percurso offline publicado: ${payload.points.length} pontos.`);
+        } catch { break; }
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [party.connected, party.joined, party.publishExplorationTrack]);
+
   const routeCoordinates = useMemo(() => displayedRoute?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [], [displayedRoute]);
+  const recognitionCoordinates = useMemo(() => recognitionPoints.map((point) => ({ latitude: point.lat, longitude: point.lng })), [recognitionPoints]);
+  const receivedRecognitionTracks = party.explorationTracks || [];
   const clusteredPois = useMemo(() => clusterPois(pois, visibleRegion, {
     width: viewport.width,
     height: Math.max(1, viewport.height * 0.6)
@@ -1304,6 +1391,11 @@ export default function PartyScreen({ session, onLeave }) {
         showsUserLocation={false}
         showsPointsOfInterest={false}
         onRegionChangeComplete={setVisibleRegion}
+        onLongPress={(event) => {
+          if (navigationLocked) return;
+          const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
+          chooseAttentionPoint({ lat, lng, timestamp: Date.now(), accuracy: 0 });
+        }}
         onPress={(event) => {
           if (navigationLocked) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
@@ -1324,8 +1416,17 @@ export default function PartyScreen({ session, onLeave }) {
         }}
       >
         {Platform.OS === 'android' && <UrlTile key={mapStyle} urlTemplate={MAP_TILE_TEMPLATES[mapStyle]} maximumZ={19} minimumZ={1} zIndex={-1} />}
+        {recognitionCoordinates.length > 1 && <Polyline coordinates={recognitionCoordinates} strokeColor="#16a34a" strokeWidth={4} lineDashPattern={[8, 5]} />}
+        {receivedRecognitionTracks.filter((track) => track.trackId !== recognitionTrack?.id).map((track) => <Polyline key={`exploration:${track.trackId}`} coordinates={track.points.map((point) => ({ latitude: point.lat, longitude: point.lng }))} strokeColor="#7c3aed" strokeWidth={4} lineDashPattern={[10, 6]} />)}
         {routeCoordinates.length > 1 && <Polyline coordinates={routeCoordinates} strokeColor="#ffffff" strokeWidth={9} />}
         {routeCoordinates.length > 1 && <Polyline coordinates={routeCoordinates} strokeColor="#2563eb" strokeWidth={6} />}
+
+        {attentionPoints.map((point) => <Marker key={point.id} coordinate={{ latitude: point.lat, longitude: point.lng }} title={point.type} description={point.note || `Marcado por ${point.userName || session.name}`} tracksViewChanges={false}>
+          <View style={styles.attentionMarker}><Text style={styles.attentionMarkerText}>!</Text></View>
+        </Marker>)}
+        {receivedRecognitionTracks.filter((track) => track.trackId !== recognitionTrack?.id).flatMap((track) => (track.attentionPoints || []).map((point) => <Marker key={`remote-attention:${track.trackId}:${point.id}`} coordinate={{ latitude: point.lat, longitude: point.lng }} title={point.type} description={point.note || `Percurso de ${track.userName}`} tracksViewChanges={false}>
+          <View style={[styles.attentionMarker, styles.remoteAttentionMarker]}><Text style={styles.attentionMarkerText}>!</Text></View>
+        </Marker>))}
 
         {clusteredPois.map((marker) => {
           if (marker.type === 'cluster') return <Marker
@@ -1488,6 +1589,11 @@ export default function PartyScreen({ session, onLeave }) {
         >
           <Text style={styles.mapStyleToggleText}>Mapa: {mapStyle === 'simple' ? 'Simples' : 'Detalhado'}</Text>
         </Pressable>
+        <View style={styles.recognitionRow}>
+          <Text style={styles.recognitionText}>Percurso: {recognitionPoints.length} GPS · {attentionPoints.length} pontos</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Marcar ponto de atenção no local atual" onPress={() => chooseAttentionPoint()} style={styles.recognitionButton}><Text style={styles.recognitionButtonText}>Marcar</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Publicar percurso e pontos" onPress={publishRecognitionTrack} style={styles.recognitionPublishButton}><Text style={styles.recognitionButtonText}>Publicar</Text></Pressable>
+        </View>
         {query.trim().length > 0 && results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="always" nestedScrollEnabled>
           <Text accessibilityLiveRegion="polite" style={styles.resultsCount}>{results.length} resultado{results.length === 1 ? '' : 's'}</Text>
           {results.map((result) => {
@@ -1729,7 +1835,7 @@ const styles = StyleSheet.create({
   assistantRow: { minHeight: 43, marginTop: 7, paddingHorizontal: 10, borderRadius: 22, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', flexDirection: 'row', alignItems: 'center' }, assistantIcon: { color: '#2563eb', fontSize: 16, marginRight: 6 }, assistantInput: { flex: 1, height: 40, color: '#0f172a', fontSize: 11 }, assistantMicButton: { width: 32, height: 32, marginLeft: 4, borderRadius: 16, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, assistantMicButtonActive: { backgroundColor: '#fecaca' }, assistantMicText: { color: '#1d4ed8', fontSize: 14 }, assistantButton: { minHeight: 31, paddingHorizontal: 9, borderRadius: 15, backgroundColor: '#2563eb', alignItems: 'center', justifyContent: 'center' }, assistantButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, assistantReply: { marginTop: 5, paddingHorizontal: 10, color: '#1e3a8a', fontSize: 10, fontWeight: '700' },
   searchIcon: { color: '#475569', fontSize: 24, marginRight: 8 }, floatingInput: { flex: 1, height: 48, color: '#0f172a', fontSize: 15 },
   clearSearchButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, clearSearch: { color: '#64748b', fontSize: 25, lineHeight: 28 }, floatingSearchButton: { color: '#1a73e8', fontSize: 13, fontWeight: '800', paddingVertical: 12 },
-  mapStyleOptions: { alignSelf: 'flex-start', flexDirection: 'row', marginTop: 7, padding: 3, borderRadius: 17, backgroundColor: 'rgba(15, 23, 42, 0.86)', gap: 3 }, mapStyleToggle: { alignSelf: 'flex-start', marginTop: 6, minHeight: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: 'rgba(15, 23, 42, 0.86)', justifyContent: 'center' }, mapStyleToggleText: { color: '#e2e8f0', fontSize: 10, fontWeight: '800' },
+  mapStyleOptions: { alignSelf: 'flex-start', flexDirection: 'row', marginTop: 7, padding: 3, borderRadius: 17, backgroundColor: 'rgba(15, 23, 42, 0.86)', gap: 3 }, mapStyleToggle: { alignSelf: 'flex-start', marginTop: 6, minHeight: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: 'rgba(15, 23, 42, 0.86)', justifyContent: 'center' }, mapStyleToggleText: { color: '#e2e8f0', fontSize: 10, fontWeight: '800' }, recognitionRow: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, padding: 6, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.95)' }, recognitionText: { flex: 1, color: '#334155', fontSize: 10, fontWeight: '800' }, recognitionButton: { minHeight: 28, paddingHorizontal: 9, borderRadius: 8, backgroundColor: '#fef3c7', alignItems: 'center', justifyContent: 'center' }, recognitionPublishButton: { minHeight: 28, paddingHorizontal: 9, borderRadius: 8, backgroundColor: '#16a34a', alignItems: 'center', justifyContent: 'center' }, recognitionButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, attentionMarker: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#dc2626', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }, remoteAttentionMarker: { backgroundColor: '#7c3aed' }, attentionMarkerText: { color: '#fff', fontSize: 15, fontWeight: '900' },
   mapStyleButton: { minHeight: 30, paddingHorizontal: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, mapStyleButtonActive: { backgroundColor: '#fff' },
   mapStyleText: { color: '#e2e8f0', fontSize: 11, fontWeight: '800' }, mapStyleTextActive: { color: '#0f172a' },
   floatingResults: { maxHeight: 310, marginTop: 7, backgroundColor: '#fff', borderRadius: 14, shadowColor: '#0f172a', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 5 },

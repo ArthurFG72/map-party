@@ -92,6 +92,7 @@ export function useParty(roomId, name, visible = true) {
   const [incomingSos, setIncomingSos] = useState(null);
   const [incomingDirectMessage, setIncomingDirectMessage] = useState(null);
   const [incomingNavigationCommand, setIncomingNavigationCommand] = useState(null);
+  const [explorationTracks, setExplorationTracks] = useState([]);
   useEffect(() => { visibleRef.current = visible; }, [visible]);
 
   useEffect(() => {
@@ -160,6 +161,7 @@ export function useParty(roomId, name, visible = true) {
       const nextRoute = hasRoute ? snapshot.route : cachedRouteRef.current;
       cachedRouteRef.current = nextRoute;
       setParticipants(nextParticipants);
+      setExplorationTracks(Array.isArray(snapshot.explorationTracks) ? snapshot.explorationTracks : []);
       setRouteSharingConsentState(Boolean(nextParticipants.find((item) => item.id === participantIdRef.current)?.routeSharingConsent));
       setRoute(nextRoute);
       routeRevisionRef.current = nextRoute?.revision || 0;
@@ -273,6 +275,11 @@ export function useParty(roomId, name, visible = true) {
     function onSosResponse(payload) {
       if (payload?.messageId) setSosDelivery(payload);
     }
+    function onExplorationTrack(payload) {
+      if (payload?.trackId && Array.isArray(payload.points)) {
+        setExplorationTracks((current) => [payload, ...current.filter((item) => item.trackId !== payload.trackId)].slice(0, 10));
+      }
+    }
     function onDirectMessage(payload) {
       if (payload?.messageId && payload?.text) setIncomingDirectMessage(payload);
     }
@@ -309,6 +316,7 @@ export function useParty(roomId, name, visible = true) {
     socket.on('route-share-invitation', onRouteShareInvitation);
     socket.on('sos-signal', onSosSignal);
     socket.on('sos-response', onSosResponse);
+    socket.on('exploration-track', onExplorationTrack);
     socket.on('direct-message', onDirectMessage);
     socket.on('navigation-command', onNavigationCommand);
     socket.io.on('reconnect_attempt', onReconnectAttempt);
@@ -446,6 +454,15 @@ export function useParty(roomId, name, visible = true) {
     });
   }), [socket]);
 
+  const publishExplorationTrack = useCallback((track) => new Promise((resolve, reject) => {
+    if (!track?.trackId || !Array.isArray(track.points) || !socket.connected || !joinedRef.current) return reject(new Error('Sem conexão para publicar o percurso.'));
+    socket.timeout(10_000).emit('publish-exploration-track', track, (timeoutError, reply) => {
+      if (timeoutError) return reject(new Error('O servidor não confirmou o percurso.'));
+      if (!reply?.ok) return reject(new Error(reply?.error || 'Percurso rejeitado.'));
+      resolve(reply);
+    });
+  }), [socket]);
+
   const sendEmergencyPacket = useCallback(async (packet, options = {}) => {
     const messageId = `sos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const message = String(options.message || 'SOS — preciso de ajuda').trim().slice(0, 160);
@@ -518,6 +535,8 @@ export function useParty(roomId, name, visible = true) {
     requestRouteShare,
     respondRouteShareInvitation,
     respondSos,
+    publishExplorationTrack,
+    explorationTracks,
     sendEmergencyPacket,
     sosDelivery,
     incomingSos,

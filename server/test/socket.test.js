@@ -577,6 +577,31 @@ test('participante envia mensagem direta ao selecionar outro participante', asyn
   assert.equal(received.text, 'Tudo certo?');
 });
 
+test('publica percurso de reconhecimento com pontos de atenção para toda a party', async (t) => {
+  const server = await startServer();
+  const clients = [];
+  t.after(async () => { clients.forEach((client) => client.disconnect()); await new Promise((resolve) => server.io.close(resolve)); });
+  const ana = await server.connect(); const bia = await server.connect(); clients.push(ana, bia);
+  const anaJoin = await emitAck(ana, 'join-party', { roomId: 'reconhecimento-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'reconhecimento-1', name: 'Bia' });
+  const track = {
+    trackId: 'track-12345678',
+    userName: 'Ana',
+    startedAt: 1000,
+    points: [{ lat: -23.55, lng: -46.63, timestamp: 1000 }, { lat: -23.551, lng: -46.631, timestamp: 2000 }],
+    attentionPoints: [{ id: 'attention-1', type: 'buraco', note: 'Faixa direita', lat: -23.5505, lng: -46.6305, createdAt: 1500 }]
+  };
+  const receivedPromise = once(bia, 'exploration-track');
+  const ack = await emitAck(ana, 'publish-exploration-track', track);
+  const received = await receivedPromise;
+  assert.equal(ack.ok, true);
+  assert.equal(received.trackId, track.trackId);
+  assert.equal(received.userName, 'Ana');
+  assert.equal(received.points.length, 2);
+  assert.equal(received.attentionPoints[0].type, 'buraco');
+  assert.equal(received.participantId, anaJoin.participantId);
+});
+
 test('convite de rota pendente Ã© reenviado quando o participante retorna', async (t) => {
   const server = await startServer({ disconnectGraceMs: 50 });
   const clients = [];

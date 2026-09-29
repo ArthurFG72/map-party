@@ -215,6 +215,32 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence, ...(moved < MIN_LOCATION_BROADCAST_METERS && elapsed < 10_000 ? { unchanged: true } : {}) }));
     });
 
+    socket.on('publish-exploration-track', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      const trackId = typeof payload?.trackId === 'string' ? payload.trackId.trim().slice(0, 100) : '';
+      const userName = typeof payload?.userName === 'string' ? payload.userName.trim().slice(0, 100) : '';
+      const points = Array.isArray(payload?.points) ? payload.points.slice(-5000) : [];
+      const attentionPoints = Array.isArray(payload?.attentionPoints) ? payload.attentionPoints.slice(0, 100) : [];
+      const validPoint = (point) => Number.isFinite(Number(point?.lat)) && Number.isFinite(Number(point?.lng))
+        && Number(point.lat) >= -90 && Number(point.lat) <= 90 && Number(point.lng) >= -180 && Number(point.lng) <= 180
+        && Number.isFinite(Number(point?.timestamp));
+      if (!membership || !/^track-[a-z0-9-]{8,100}$/i.test(trackId) || !userName || points.length < 2 || !points.every(validPoint)) {
+        return reject(ack, 'Percurso de reconhecimento inválido.', 'INVALID_EXPLORATION_TRACK');
+      }
+      const normalized = {
+        trackId,
+        userName,
+        startedAt: Number.isFinite(Number(payload.startedAt)) ? Number(payload.startedAt) : points[0].timestamp,
+        endedAt: Number.isFinite(Number(payload.endedAt)) ? Number(payload.endedAt) : Date.now(),
+        points: points.map((point) => ({ lat: Number(point.lat), lng: Number(point.lng), timestamp: Number(point.timestamp), ...(Number.isFinite(Number(point.accuracy)) ? { accuracy: Number(point.accuracy) } : {}) })),
+        attentionPoints: attentionPoints.filter((point) => validPoint({ ...point, timestamp: point.createdAt || Date.now() })).map((point) => ({ id: String(point.id || '').slice(0, 100), type: String(point.type || 'outro').slice(0, 40), note: String(point.note || '').slice(0, 240), lat: Number(point.lat), lng: Number(point.lng), createdAt: Number(point.createdAt) || Date.now(), userName }))
+      };
+      membership.room.explorationTracks.set(trackId, normalized);
+      while (membership.room.explorationTracks.size > 10) membership.room.explorationTracks.delete(membership.room.explorationTracks.keys().next().value);
+      io.to(membership.roomId).emit('exploration-track', versioned({ ...normalized, participantId: membership.participantId }));
+      if (typeof ack === 'function') ack(versioned({ ok: true, trackId, points: normalized.points.length, attentionPoints: normalized.attentionPoints.length }));
+    });
+
     socket.on('update-route', async (payload, ack) => {
       const membership = store.roomFor(socket.id);
       const update = cleanRouteIntent(payload);
