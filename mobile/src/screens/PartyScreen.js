@@ -25,9 +25,10 @@ import { connectivityLabel, CONNECTIVITY_LEVEL } from '../connectivity';
 // visible eagle asset already bundled with the app icon.
 const EAGLE_MARKER_IMAGE = require('../../assets/eagle-app-icon.png');
 const EAGLE_MARKER_ANCHOR = Platform.OS === 'android' ? { x: 0.5, y: 50 / 88 } : undefined;
-// Apple Maps uses centerOffset for MapKit annotation views; anchor is for the
-// Google Maps implementation and is ignored by the default iOS provider.
-const EAGLE_MARKER_CENTER_OFFSET = Platform.OS === 'ios' ? { x: 0, y: -6 } : undefined;
+// MapKit positions the custom annotation view by its full measured frame. The
+// eagle artwork is slightly to the right of the route at that origin, so keep
+// the iOS correction limited to the annotation position.
+const EAGLE_MARKER_CENTER_OFFSET = Platform.OS === 'ios' ? { x: -18, y: -6 } : undefined;
 
 function decodeMojibake(value) {
   const text = String(value ?? '');
@@ -258,6 +259,7 @@ export default function PartyScreen({ session, onLeave }) {
   const offRouteReadingsRef = useRef(0);
   const recalculationRef = useRef(false);
   const lastRecalculationAtRef = useRef(0);
+  const lastNavigationCameraRef = useRef(null);
   const appStateRef = useRef(AppState.currentState);
   const restoreMapTimerRef = useRef(null);
   const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
@@ -490,16 +492,29 @@ export default function PartyScreen({ session, onLeave }) {
       const maneuver = navigationGuidance?.precisionMode && navigationGuidance.maneuverPoint
         ? navigationGuidance.maneuverPoint
         : null;
-      mapRef.current?.animateCamera({
-        center: {
-          latitude: maneuver ? (location.position.lat + maneuver.lat) / 2 : location.position.lat,
-          longitude: maneuver ? (location.position.lng + maneuver.lng) / 2 : location.position.lng
-        },
-        zoom: maneuver ? 19 : 17,
-        heading: cameraHeading(location.position, headingRef)
-      }, { duration: 350 });
+      const center = {
+        latitude: maneuver ? (location.position.lat + maneuver.lat) / 2 : location.position.lat,
+        longitude: maneuver ? (location.position.lng + maneuver.lng) / 2 : location.position.lng
+      };
+      const heading = cameraHeading(location.position, headingRef);
+      const previous = lastNavigationCameraRef.current;
+      const movedEnough = !previous || distanceMeters(
+        { lat: previous.latitude, lng: previous.longitude },
+        { lat: center.latitude, lng: center.longitude }
+      ) >= 10;
+      const headingChanged = heading != null && (
+        previous?.heading == null || Math.abs(((heading - previous.heading + 540) % 360) - 180) >= 8
+      );
+      if (!movedEnough && !headingChanged) return;
+      lastNavigationCameraRef.current = { ...center, heading };
+      try {
+        mapRef.current?.animateCamera({ center, zoom: maneuver ? 19 : 17, heading }, { duration: 250 });
+      } catch (error) {
+        console.warn('[MapParty] navigation camera update failed', error?.message || error);
+      }
       return;
     }
+    lastNavigationCameraRef.current = null;
     if (didCenterUserRef.current) return;
     didCenterUserRef.current = true;
     mapRef.current?.animateToRegion({
@@ -1702,7 +1717,7 @@ const styles = StyleSheet.create({
   // Keep the name inside the native marker bitmap. Android clips custom marker
   // content outside the measured view even when React Native allows overflow.
   eagleMarker: { width: 132, height: 88, alignItems: 'center', justifyContent: 'flex-start' }, eagleMarkerEstimated: { opacity: 0.58 }, eagleMarkerImage: { position: 'absolute', top: 0, width: 38, height: 50 },
-  personLabel: { position: 'absolute', top: 50, left: 0, zIndex: 10, elevation: 10, width: 132, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderRadius: 4, backgroundColor: '#ffffff' }, personLabelBelow: { top: 70 }, personLabelText: { color: '#0f172a', fontSize: 9, fontWeight: '800' },
+  personLabel: { position: 'absolute', top: 50, left: 0, zIndex: 10, elevation: 10, width: 132, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderRadius: 4, backgroundColor: 'transparent' }, personLabelBelow: { top: 70 }, personLabelText: { color: '#fff', fontSize: 9, fontWeight: '800', textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 2 },
   clusterMarker: { minWidth: 44, height: 44, paddingHorizontal: 9, borderRadius: 22, borderWidth: 3, borderColor: '#fff', backgroundColor: '#1d4ed8', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
   clusterMarkerText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   poiMarker: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.22, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 }, poiMarkerIcon: { fontSize: 16 },
