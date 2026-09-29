@@ -1608,7 +1608,16 @@ export default function PartyScreen({ session, onLeave }) {
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
         <View style={styles.actionRow}>
-          {navigationRoute && !navigationActive && <Pressable onPress={startNavigation} style={styles.startNavigation}><Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>Iniciar rota</Text></Pressable>}
+          {!navigationActive && <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={navigationRoute ? 'Iniciar navegação' : 'Iniciar navegação, aguardando rota'}
+            accessibilityState={{ disabled: !navigationRoute || loading, busy: loading }}
+            disabled={!navigationRoute || loading}
+            onPress={startNavigation}
+            style={[styles.startNavigation, (!navigationRoute || loading) && styles.disabled]}
+          >
+            <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : 'Iniciar rota'}</Text>
+          </Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Enviar SOS criptografado" accessibilityState={{ disabled: sosSending, busy: sosSending }} disabled={sosSending} onPress={sendSos} style={[styles.sosButton, (!navigationRoute || navigationActive) && styles.sosButtonSolo, sosSending && styles.disabled]}>
             <Text maxFontSizeMultiplier={1.1} style={styles.sosButtonText}>{sosSending ? 'Enviando...' : 'SOS'}</Text>
           </Pressable>
