@@ -41,10 +41,28 @@ test('geocodificação normaliza a busca, limpa resultados e usa cache', async (
   assert.equal(first.results[0].lat, -23.5504);
 });
 
+test('busca nomes locais no Overpass quando o Nominatim não retorna endereço', async () => {
+  const calls = [];
+  const service = createGeocodeService({
+    minIntervalMs: 0,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url.hostname.includes('nominatim')) return { ok: true, json: async () => [] };
+      return { ok: true, json: async () => ({ elements: [{ type: 'node', id: 42, lat: -18.9, lon: -48.2, tags: { name: 'Yes Vida Boa', amenity: 'place' } }] }) };
+    }
+  });
+  const result = await service.search('Condominio Yes Vida Boa', 5, '-48.3,-18.8,-48.1,-19.0', { lat: -18.9, lng: -48.2 });
+  assert.equal(result.results[0].label, 'Yes Vida Boa');
+  assert.equal(result.results[0].id, 'overpass:node:42');
+  assert.equal(calls.length, 3);
+  assert.match(calls[2].options.body, /Yes.*Vida.*Boa/i);
+});
+
 test('serviço de rotas valida a solicitação e a resposta do provedor', async () => {
   const service = createRouteService({
     fetchImpl: async (url) => {
       assert.match(url.pathname, /route\/v1\/driving/);
+      assert.equal(url.searchParams.get('overview'), 'full');
       assert.equal(url.searchParams.get('steps'), 'true');
       assert.equal(url.searchParams.get('geometries'), 'geojson');
       return {
@@ -135,4 +153,21 @@ test('POIs valida bbox, normaliza centros de ways e deduplica resultados', async
   assert.equal(first.results[0].category, 'restaurant');
   assert.equal(calls, 1);
   assert.equal(second.results.length, 2);
+});
+
+test('servico de rotas rejeita geometria que nao termina nos pontos solicitados', async () => {
+  const service = createRouteService({
+    fetchImpl: async () => ({ ok: true, json: async () => ({
+      code: 'Ok',
+      routes: [{
+        geometry: { type: 'LineString', coordinates: [[10, 10], [11, 11]] },
+        distance: 100,
+        duration: 10,
+        legs: [{ distance: 100, duration: 10, steps: [{ maneuver: { type: 'depart', location: [0, 0] } }] }]
+      }]
+    }) })
+  });
+  await assert.rejects(() => service.calculate({
+    profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 1, lng: 1 }
+  }), { code: 'PROVIDER_ERROR' });
 });

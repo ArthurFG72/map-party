@@ -55,6 +55,37 @@ function cleanResult(item, center) {
   };
 }
 
+function overpassQueryText(value) {
+  const ignored = new Set(['condominio', 'conjunto', 'residencial', 'edificio', 'edifício', 'loteamento', 'bairro']);
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 2 && !ignored.has(term))
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+}
+
+function cleanOverpassResult(item, center) {
+  const tags = item?.tags || {};
+  const point = item?.center || item;
+  const lat = Number(point?.lat);
+  const lng = Number(point?.lon);
+  const name = String(tags.name || tags['official_name'] || '').replace(/\s+/g, ' ').trim();
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const address = [tags['addr:street'], tags['addr:housenumber'], tags['addr:city']].filter(Boolean).join(', ');
+  return cleanResult({
+    place_id: `overpass:${item.type}:${item.id}`,
+    display_name: address ? `${name}, ${address}` : name,
+    lat,
+    lon: lng,
+    category: tags.amenity || tags.shop || tags.tourism || 'place',
+    type: item.type,
+    importance: 0.5
+  }, center);
+}
+
 function distanceBetween(first, second) {
   const latitude = (second.lat - first.lat) * Math.PI / 180;
   const longitude = (second.lng - first.lng) * Math.PI / 180;
@@ -65,6 +96,7 @@ function distanceBetween(first, second) {
 
 export function createGeocodeService({
   baseUrl = process.env.GEOCODER_BASE_URL || 'https://nominatim.openstreetmap.org',
+  overpassBaseUrl = process.env.OVERPASS_BASE_URL || 'https://overpass-api.de/api/interpreter',
   userAgent = process.env.GEOCODER_USER_AGENT || 'MapParty/1.0 (local-development)',
   fetchImpl = fetch,
   cache = new TtlLruCache(),
@@ -129,6 +161,34 @@ export function createGeocodeService({
           if (!Array.isArray(payload)) throw Object.assign(new Error('Invalid provider response'), { code: 'PROVIDER_ERROR' });
         }
         let results = payload.map((item) => cleanResult(item, normalizedCenter)).filter(Boolean);
+        if (!results.length && (normalizedCenter || normalizedViewbox)) {
+          const searchText = overpassQueryText(query);
+          if (searchText) {
+            const overpassUrl = new URL(overpassBaseUrl);
+            const area = normalizedViewbox
+              ? (() => {
+                const [west, north, east, south] = normalizedViewbox.split(',').map(Number);
+                return `(${south},${west},${north},${east})`;
+              })()
+              : `(around:10000,${normalizedCenter.lat},${normalizedCenter.lng})`;
+            const overpassQuery = `[out:json][timeout:15];nwr["name"~"${searchText}",i]${area};out center tags;`;
+            try {
+              const overpassResponse = await fetchImpl(overpassUrl, {
+                method: 'POST',
+                headers: { Accept: 'application/json', 'Content-Type': 'text/plain', 'User-Agent': userAgent },
+                body: overpassQuery,
+                signal: controller.signal
+              });
+              if (overpassResponse.ok) {
+                const overpassPayload = await overpassResponse.json();
+                results = (Array.isArray(overpassPayload?.elements) ? overpassPayload.elements : [])
+                  .map((item) => cleanOverpassResult(item, normalizedCenter)).filter(Boolean);
+              }
+            } catch {
+              // Nominatim remains the authoritative fallback when Overpass is unavailable.
+            }
+          }
+        }
         if (normalizedCenter) {
           results.sort((first, second) => {
             const firstScore = (first.distanceMeters ?? Number.MAX_SAFE_INTEGER) * (1.15 - Math.min(first.importance, 1) * 0.15);
@@ -138,7 +198,7 @@ export function createGeocodeService({
         }
         const result = {
           results: results.slice(0, limit),
-          attribution: 'Dados de busca © contribuidores do OpenStreetMap (Nominatim)'
+          attribution: 'Dados de busca © contribuidores do OpenStreetMap (Nominatim/Overpass)'
         };
         cache.set(key, result);
         return result;
