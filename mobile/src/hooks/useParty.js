@@ -197,7 +197,8 @@ export function useParty(roomId, name, visible = true) {
         setIncomingSos({
           messageId: message.messageId,
           participantName: message.participantName || 'Um participante',
-          message: message.message || 'SOS — preciso de ajuda'
+          message: message.message || 'SOS — preciso de ajuda',
+          location: message.location || null
         });
         localTransport.send({ type: 'sos-ack', ackFor: message.messageId, participantId: name }).catch(() => undefined);
       }
@@ -269,6 +270,9 @@ export function useParty(roomId, name, visible = true) {
     function onSosSignal(payload) {
       if (payload?.messageId) setIncomingSos(payload);
     }
+    function onSosResponse(payload) {
+      if (payload?.messageId) setSosDelivery(payload);
+    }
     function onDirectMessage(payload) {
       if (payload?.messageId && payload?.text) setIncomingDirectMessage(payload);
     }
@@ -304,6 +308,7 @@ export function useParty(roomId, name, visible = true) {
     socket.on('route-shared', onRouteShared);
     socket.on('route-share-invitation', onRouteShareInvitation);
     socket.on('sos-signal', onSosSignal);
+    socket.on('sos-response', onSosResponse);
     socket.on('direct-message', onDirectMessage);
     socket.on('navigation-command', onNavigationCommand);
     socket.io.on('reconnect_attempt', onReconnectAttempt);
@@ -432,16 +437,26 @@ export function useParty(roomId, name, visible = true) {
 
   const clearPersonalRoute = useCallback(() => setPersonalRoute(null), []);
 
+  const respondSos = useCallback((messageId, accepted) => new Promise((resolve, reject) => {
+    if (!messageId || !socket.connected || !joinedRef.current) return reject(new Error('SOS indisponível.'));
+    socket.timeout(5_000).emit('respond-sos', { messageId, accepted: Boolean(accepted) }, (timeoutError, reply) => {
+      if (timeoutError) return reject(new Error('O servidor não confirmou a resposta ao SOS.'));
+      if (!reply?.ok) return reject(new Error(reply?.error || 'Não foi possível responder ao SOS.'));
+      resolve(reply);
+    });
+  }), [socket]);
+
   const sendEmergencyPacket = useCallback(async (packet, options = {}) => {
     const messageId = `sos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const message = String(options.message || 'SOS — preciso de ajuda').trim().slice(0, 160);
     pendingSosRef.current.set(messageId, new Set());
     setSosDelivery({ messageId, participants: [] });
-    await localTransportRef.current?.send({ type: 'emergency', messageId, participantId: participantIdRef.current, participantName: name, message, packet });
+    const location = packet?.location || options.location || null;
+    await localTransportRef.current?.send({ type: 'emergency', messageId, participantId: participantIdRef.current, participantName: name, message, location, packet });
     if (!socket.connected || !joinedRef.current) return { relayed: false, signalSent: false, messageId };
 
     const signal = await new Promise((resolve, reject) => {
-      socket.timeout(5_000).emit('send-sos-signal', { messageId, message }, (timeoutError, reply) => {
+      socket.timeout(5_000).emit('send-sos-signal', { messageId, message, location }, (timeoutError, reply) => {
         if (timeoutError) return reject(new Error('O servidor nao confirmou o SOS.'));
         if (!reply?.ok) return reject(new Error(reply?.error || 'O servidor rejeitou o SOS.'));
         resolve(reply);
@@ -502,6 +517,7 @@ export function useParty(roomId, name, visible = true) {
     setRoutePermission,
     requestRouteShare,
     respondRouteShareInvitation,
+    respondSos,
     sendEmergencyPacket,
     sosDelivery,
     incomingSos,

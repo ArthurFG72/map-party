@@ -4,6 +4,6 @@
     "modules": ["MapPartyEmergencyCryptoModule"]
   },
   "ios": {
-    "modules": ["MapPartyLocalTransportModule", "MapPartyEmergencyCryptoModule"]
+    "modules": ["MapPartyLocalTransportModule", "MapPartyEmergencyCryptoModule", "MapPartyLocationModule"]
   }
 }

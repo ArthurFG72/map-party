@@ -315,6 +315,14 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       const membership = store.roomFor(socket.id);
       const messageId = typeof payload?.messageId === 'string' ? payload.messageId.trim() : '';
       const message = typeof payload?.message === 'string' ? payload.message.trim().slice(0, 160) : '';
+      const location = payload?.location && Number.isFinite(Number(payload.location.lat)) && Number.isFinite(Number(payload.location.lng))
+        ? {
+          lat: Number(payload.location.lat),
+          lng: Number(payload.location.lng),
+          ...(Number.isFinite(Number(payload.location.accuracy)) ? { accuracy: Number(payload.location.accuracy) } : {}),
+          timestamp: Number.isFinite(Number(payload.location.timestamp)) ? Number(payload.location.timestamp) : Date.now()
+        }
+        : null;
       if (!membership || !/^sos-[a-z0-9-]{8,80}$/i.test(messageId)) {
         return reject(ack, 'Sinal SOS inválido.');
       }
@@ -324,9 +332,25 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
         message: message || 'SOS — preciso de ajuda',
         participantId: membership.participantId,
         participantName: participant?.name || 'Participante',
+        location,
         sentAt: Date.now()
       }));
       if (typeof ack === 'function') ack(versioned({ ok: true, messageId }));
+    });
+    socket.on('respond-sos', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      const messageId = typeof payload?.messageId === 'string' ? payload.messageId.trim() : '';
+      if (!membership || !/^sos-[a-z0-9-]{8,80}$/i.test(messageId)) return reject(ack, 'Resposta SOS inválida.');
+      const participant = membership.room.participants.get(membership.participantId);
+      const response = versioned({
+        messageId,
+        accepted: payload?.accepted === true,
+        participantId: membership.participantId,
+        participantName: participant?.name || 'Participante',
+        respondedAt: Date.now()
+      });
+      io.to(membership.roomId).emit('sos-response', response);
+      if (typeof ack === 'function') ack(versioned({ ok: true, ...response }));
     });
     socket.on('send-direct-message', (payload, ack) => {
       const membership = store.roomFor(socket.id);

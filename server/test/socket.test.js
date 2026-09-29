@@ -538,12 +538,23 @@ test('SOS confirmado notifica os demais participantes da party', async (t) => {
   await emitAck(ana, 'join-party', { roomId: 'sos-1', name: 'Ana' });
   await emitAck(bia, 'join-party', { roomId: 'sos-1', name: 'Bia' });
   const signal = once(bia, 'sos-signal');
-  const ack = await emitAck(ana, 'send-sos-signal', { messageId: 'sos-12345678', message: 'SOS — preciso de ajuda' });
+  const ack = await emitAck(ana, 'send-sos-signal', { messageId: 'sos-12345678', message: 'SOS — preciso de ajuda', location: { lat: -23.55, lng: -46.63, accuracy: 8 } });
   const received = await signal;
   assert.equal(ack.ok, true);
   assert.equal(received.participantName, 'Ana');
   assert.equal(received.messageId, 'sos-12345678');
   assert.equal(received.message, 'SOS — preciso de ajuda');
+  assert.equal(received.location.lat, -23.55);
+  assert.equal(received.location.lng, -46.63);
+  assert.equal(received.location.accuracy, 8);
+  const anaResponse = once(ana, 'sos-response');
+  const biaResponse = once(bia, 'sos-response');
+  const responseAck = await emitAck(bia, 'respond-sos', { messageId: 'sos-12345678', accepted: true });
+  const [responseForAna, responseForBia] = await Promise.all([anaResponse, biaResponse]);
+  assert.equal(responseAck.ok, true);
+  assert.equal(responseForAna.accepted, true);
+  assert.equal(responseForAna.participantName, 'Bia');
+  assert.equal(responseForBia.participantId, responseForAna.participantId);
 });
 
 test('participante envia mensagem direta ao selecionar outro participante', async (t) => {

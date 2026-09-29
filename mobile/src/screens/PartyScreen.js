@@ -372,10 +372,31 @@ export default function PartyScreen({ session, onLeave }) {
 
   useEffect(() => {
     if (party.incomingSos?.messageId) {
-      const sender = party.incomingSos.participantName || 'Um participante';
-      const sosMessage = party.incomingSos.message || 'SOS — preciso de ajuda';
-      Alert.alert('SOS RECEBIDO', `${sender}: ${sosMessage}`);
-      setMessage(`SOS recebido de ${sender}: ${sosMessage}`);
+      const incoming = party.incomingSos;
+      const sender = incoming.participantName || 'Um participante';
+      const directDistance = location.position && incoming.location ? distanceMeters(location.position, incoming.location) : null;
+      const formatDistance = (meters) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+      const showPrompt = (route) => {
+        const routeDistance = Number.isFinite(route?.distance) ? route.distance : directDistance;
+        const distanceLine = Number.isFinite(routeDistance) ? `Distância ${route?.distance ? 'pela rota' : 'aproximada'}: ${formatDistance(routeDistance)}.` : 'Distância indisponível sem GPS.';
+        Alert.alert('SOS RECEBIDO', `${sender}: ${incoming.message || 'SOS — preciso de ajuda'}\n${distanceLine}\nDeseja ir até o local?`, [
+          { text: 'Agora não', style: 'cancel', onPress: () => party.respondSos(incoming.messageId, false).catch(() => undefined) },
+          { text: 'Ir até o local', onPress: async () => {
+            try {
+              await party.respondSos(incoming.messageId, true);
+              if (!route) return setMessage('Aceite confirmado, mas não foi possível calcular a rota.');
+              setLocalRoute(route);
+              setPoints({ origin: route.origin, destination: route.destination });
+              startNavigation(route);
+            } catch (error) { setMessage(error.message); }
+          } }
+        ]);
+      };
+      if (incoming.location && location.position) {
+        calculateRoute(location.position, { lat: incoming.location.lat, lng: incoming.location.lng, name: `SOS de ${sender}` })
+          .then(showPrompt).catch(() => showPrompt(null));
+      } else showPrompt(null);
+      setMessage(`SOS recebido de ${sender}. Calculando distância e rota...`);
     }
   }, [party.incomingSos]);
 
@@ -413,8 +434,12 @@ export default function PartyScreen({ session, onLeave }) {
   }, [party.incomingRouteShareInvitation]);
 
   useEffect(() => {
-    if (party.sosDelivery?.participants?.length) {
-      setMessage(`SOS confirmado por ${party.sosDelivery.participants.length} participante(s).`);
+    if (party.sosDelivery?.messageId) {
+      const response = party.sosDelivery;
+      setMessage(response.accepted
+        ? `${response.participantName || 'Um participante'} aceitou o SOS e está indo ao local.`
+        : `${response.participantName || 'Um participante'} não poderá atender ao SOS.`);
+      if (response.accepted) Alert.alert('SOS ATENDIDO', `${response.participantName || 'Um participante'} aceitou ir ao local.`);
     }
   }, [party.sosDelivery]);
 
@@ -1154,7 +1179,7 @@ export default function PartyScreen({ session, onLeave }) {
         battery: 0,
         sequence: Date.now() % 0xffffffff
       });
-      const result = await party.sendEmergencyPacket(packet, { message: 'SOS — preciso de ajuda' });
+      const result = await party.sendEmergencyPacket(packet, { message: 'SOS — preciso de ajuda', location: location.position });
       setMessage(result?.relayed === false
         ? 'SOS criptografado enviado localmente; aguardando confirmacao.'
         : 'SOS criptografado enviado; aguardando confirmacao local.');
