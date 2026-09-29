@@ -723,6 +723,8 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   async function search() {
+    searchInputRef.current?.blur();
+    Keyboard.dismiss();
     if (!party.joined) return setMessage('Aguarde a conexão com a party para buscar lugares.');
     if (!party.connectivity.capabilities.canSearch) return setMessage('A conexão está limitada. A busca será liberada quando a rede melhorar.');
     if (query.trim().length < 3) return setMessage('Digite pelo menos 3 caracteres.');
@@ -1422,7 +1424,7 @@ export default function PartyScreen({ session, onLeave }) {
             value={query}
             onChangeText={setQuery}
             onFocus={() => setShowSavedPlaces(true)}
-            onSubmitEditing={search}
+            onSubmitEditing={() => { Keyboard.dismiss(); search(); }}
             blurOnSubmit
             placeholder={`Buscar ${activeKind === 'origin' ? 'origem' : 'destino'}`}
             accessibilityLabel="Buscar lugar"
@@ -1551,7 +1553,7 @@ export default function PartyScreen({ session, onLeave }) {
       </Pressable>
     </View>
 
-    {!navigationActive && <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
+    {!navigationActive && <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={8}>
       <View style={styles.panel}>
         <View style={styles.panelHandle} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.people}>
