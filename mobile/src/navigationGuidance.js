@@ -193,6 +193,7 @@ export function buildNavigationGuidance(route, location) {
   const steps = routeSteps(route, coordinates);
   const tolerance = 15;
   const next = steps.find((item) => item.distanceAlong >= (routePosition?.distanceAlong || 0) - tolerance) || steps.at(-1);
+  const current = [...steps].reverse().find((item) => item.distanceAlong <= (routePosition?.distanceAlong || 0) + tolerance);
   const geometryScale = routePosition?.totalDistance > 0 && routeDistance > 0
     ? routeDistance / routePosition.totalDistance
     : 1;
@@ -226,7 +227,11 @@ export function buildNavigationGuidance(route, location) {
       ? 'Continue pela rota até o destino'
       : instructionReady
         ? instructionForStep(next.step)
-        : 'Siga pela rota azul.';
+        : current?.step?.name
+          ? `Siga pela ${current.step.name}`
+          : next?.step?.name
+            ? `Siga pela ${next.step.name}`
+            : 'Siga pela rota azul.';
   const precisionMode = Boolean(next && isComplexManeuver(next.step)
     && instructionDistance <= COMPLEX_MANEUVER_RADIUS_METERS);
 

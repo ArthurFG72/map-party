@@ -53,13 +53,17 @@ async function searchGooglePlaces(query, location, limit = 12) {
 }
 
 export async function searchPlaces(query, region, location) {
+  const localRegion = location && Number.isFinite(location.lat) && Number.isFinite(location.lng)
+    && (!region || region.latitudeDelta > 0.6 || region.longitudeDelta > 0.6)
+    ? { latitude: location.lat, longitude: location.lng, latitudeDelta: 0.35, longitudeDelta: 0.35 }
+    : region;
   const buildParams = (text) => {
     const params = new URLSearchParams({ q: text.trim(), limit: '12' });
-    if (region) {
-      const west = region.longitude - region.longitudeDelta / 2;
-      const north = region.latitude + region.latitudeDelta / 2;
-      const east = region.longitude + region.longitudeDelta / 2;
-      const south = region.latitude - region.latitudeDelta / 2;
+    if (localRegion) {
+      const west = localRegion.longitude - localRegion.longitudeDelta / 2;
+      const north = localRegion.latitude + localRegion.latitudeDelta / 2;
+      const east = localRegion.longitude + localRegion.longitudeDelta / 2;
+      const south = localRegion.latitude - localRegion.latitudeDelta / 2;
       params.set('viewbox', [west, north, east, south].map((value) => value.toFixed(5)).join(','));
     }
     if (location && Number.isFinite(location.lat) && Number.isFinite(location.lng)) {

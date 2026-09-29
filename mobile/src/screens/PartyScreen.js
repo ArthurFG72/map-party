@@ -123,8 +123,8 @@ function visualRoutePosition(route, location) {
   if (!route || !location) return location;
   const accuracy = Number(location.accuracy);
   const snapLimit = Number.isFinite(accuracy)
-    ? Math.max(90, Math.min(140, accuracy + 35))
-    : 100;
+    ? Math.max(30, Math.min(80, accuracy * 1.5 + 20))
+    : 60;
   return snapPositionToRoute(route, location, snapLimit);
 }
 
@@ -1341,7 +1341,7 @@ export default function PartyScreen({ session, onLeave }) {
           if (!ownLocation) return null;
           return <Marker
             key="self-location-eagle-view"
-            coordinate={markerCoordinate(Platform.OS === 'ios' ? ownLocation : ownMarkerLocation, ownParticipantId, party.participants, true)}
+             coordinate={markerCoordinate(ownMarkerLocation, ownParticipantId, party.participants, true)}
             title={session.name}
             accessibilityLabel={`${session.name}, sua localização`}
             // The geographic point is the bottom-center of the eagle image.
