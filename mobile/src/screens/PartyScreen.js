@@ -373,8 +373,9 @@ export default function PartyScreen({ session, onLeave }) {
   useEffect(() => {
     if (party.incomingSos?.messageId) {
       const sender = party.incomingSos.participantName || 'Um participante';
-      Alert.alert('SOS RECEBIDO', sender + ' enviou um sinal de socorro.');
-      setMessage('SOS recebido de ' + sender + '.');
+      const sosMessage = party.incomingSos.message || 'SOS — preciso de ajuda';
+      Alert.alert('SOS RECEBIDO', `${sender}: ${sosMessage}`);
+      setMessage(`SOS recebido de ${sender}: ${sosMessage}`);
     }
   }, [party.incomingSos]);
 
@@ -1149,7 +1150,7 @@ export default function PartyScreen({ session, onLeave }) {
         battery: 0,
         sequence: Date.now() % 0xffffffff
       });
-      const result = await party.sendEmergencyPacket(packet);
+      const result = await party.sendEmergencyPacket(packet, { message: 'SOS — preciso de ajuda' });
       setMessage(result?.relayed === false
         ? 'SOS criptografado enviado localmente; aguardando confirmacao.'
         : 'SOS criptografado enviado; aguardando confirmacao local.');

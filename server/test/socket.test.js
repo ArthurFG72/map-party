@@ -31,10 +31,13 @@ async function startServer(options = {}) {
   const instance = createApp({ origin: '*', ...options, routeService, disconnectGraceMs });
   await new Promise((resolve) => instance.httpServer.listen(0, '127.0.0.1', resolve));
   const port = instance.httpServer.address().port;
-  const connect = () => new Promise((resolve, reject) => {
-    const socket = createClient(`http://127.0.0.1:${port}`, { transports: ['websocket'], forceNew: true });
+  const connect = (options = {}) => new Promise((resolve, reject) => {
+    const socket = createClient(`http://127.0.0.1:${port}`, { transports: ['websocket'], forceNew: true, ...options });
     socket.once('connect', () => resolve(socket));
-    socket.once('connect_error', reject);
+    socket.once('connect_error', (error) => {
+      socket.disconnect();
+      reject(error);
+    });
   });
   return { ...instance, connect };
 }
@@ -75,6 +78,16 @@ test('participantes entram, recebem localização e sala vazia é removida', asy
   assert.equal(server.store.rooms.size, 0);
 });
 
+test('Socket.io rejeita origem fora da allowlist', async (t) => {
+  const server = await startServer({ origin: 'https://app.example.test' });
+  t.after(async () => { await new Promise((resolve) => server.io.close(resolve)); });
+
+  await assert.rejects(
+    server.connect({ extraHeaders: { Origin: 'https://evil.example.test' } }),
+    /websocket error|xhr poll error/
+  );
+});
+
 test('rota sincroniza somente após join e payload válido', async (t) => {
   const server = await startServer();
   const client = await server.connect();
@@ -86,6 +99,7 @@ test('rota sincroniza somente após join e payload válido', async (t) => {
   };
   assert.equal((await emitAck(client, 'update-route', payload)).ok, false);
   assert.equal((await emitAck(client, 'join-party', { roomId: 'grupo-2', name: 'Caio' })).ok, true);
+  assert.equal((await emitAck(client, 'set-route-sharing-consent', { enabled: true })).ok, true);
   const eventPromise = once(client, 'route-updated');
   const routeAck = await emitAck(client, 'update-route', payload);
   assert.equal(routeAck.ok, true);
@@ -96,6 +110,46 @@ test('rota sincroniza somente após join e payload válido', async (t) => {
   assert.equal(publishedRoute.legs[0].steps[0].name, 'Rota calculada');
   assert.equal(publishedRoute.updatedBy.name, 'Caio');
   assert.equal((await emitAck(client, 'send-location', { lat: 200, lng: 0, accuracy: 1 })).ok, false);
+});
+
+test('rota pessoal não altera os demais e rota compartilhada exige consentimento de todos', async (t) => {
+  const server = await startServer();
+  const ana = await server.connect();
+  const bia = await server.connect();
+  t.after(async () => { ana.disconnect(); bia.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  await emitAck(ana, 'join-party', { roomId: 'consent-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'consent-1', name: 'Bia' });
+  await emitAck(ana, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 5, timestamp: Date.now() });
+
+  let sharedUpdates = 0;
+  bia.on('route-updated', () => { sharedUpdates += 1; });
+  const personal = await emitAck(ana, 'update-route', {
+    scope: 'personal',
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  assert.equal(personal.ok, true);
+  assert.equal(server.store.snapshot('consent-1').route, null);
+  assert.equal(sharedUpdates, 0);
+
+  const rejected = await emitAck(ana, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.code, 'ROUTE_SHARING_CONSENT_REQUIRED');
+  await emitAck(ana, 'set-route-sharing-consent', { enabled: true });
+  assert.equal((await emitAck(ana, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  })).code, 'ROUTE_SHARING_CONSENT_REQUIRED');
+  await emitAck(bia, 'set-route-sharing-consent', { enabled: true });
+  const shared = await emitAck(ana, 'update-route', {
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  assert.equal(shared.ok, true);
+  assert.equal(shared.scope, 'shared');
 });
 
 test('servidor ignora rota enviada e publica cálculo autoritativo', async (t) => {
@@ -117,6 +171,7 @@ test('servidor ignora rota enviada e publica cálculo autoritativo', async (t) =
   const client = await server.connect();
   t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
   await emitAck(client, 'join-party', { roomId: 'autoridade-1', name: 'Helena' });
+  await emitAck(client, 'set-route-sharing-consent', { enabled: true });
 
   const result = await emitAck(client, 'update-route', {
     origin: { lat: -23.5, lng: -46.6 },
@@ -138,6 +193,7 @@ test('aceita intenção versionada sem geometria e reporta falha do OSRM', async
   const client = await server.connect();
   t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
   await emitAck(client, 'join-party', { roomId: 'autoridade-2', name: 'Iara' });
+  await emitAck(client, 'set-route-sharing-consent', { enabled: true });
   const result = await emitAck(client, 'update-route', {
     contractVersion: 1,
     commandId: 'route_intent_123',
@@ -161,6 +217,7 @@ test('retry de join é idempotente e preserva localização e rota', async (t) =
     distance: 1500, duration: 300
   };
   assert.equal((await emitAck(client, 'join-party', { roomId: 'retry-room', name: 'Dani' })).ok, true);
+  assert.equal((await emitAck(client, 'set-route-sharing-consent', { enabled: true })).ok, true);
   assert.equal((await emitAck(client, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 7 })).ok, true);
   assert.equal((await emitAck(client, 'update-route', route)).ok, true);
 
@@ -212,6 +269,7 @@ test('contrato versionado deduplica localização e comando de rota e protege re
   assert.equal(unsupported.ok, false);
   assert.equal(unsupported.code, 'UNSUPPORTED_CONTRACT_VERSION');
   assert.equal((await emitAck(client, 'join-party', { contractVersion: 1, roomId: 'contrato-1', name: 'Gabi' })).ok, true);
+  assert.equal((await emitAck(client, 'set-route-sharing-consent', { enabled: true })).ok, true);
 
   const firstLocation = await emitAck(client, 'send-location', {
     contractVersion: 1, locationSequence: 7, lat: -23.5, lng: -46.6, accuracy: 5
@@ -272,6 +330,7 @@ test('participantToken mantém identidade, localização e rota após reconnect'
   const repeatedJoin = await emitAck(first, 'join-party', { roomId: 'reconnect-1', name: 'Joana', participantToken });
   assert.equal(repeatedJoin.participantId, firstJoin.participantId);
   assert.equal(repeatedJoin.snapshot.participants.length, 1);
+  assert.equal((await emitAck(first, 'set-route-sharing-consent', { enabled: true })).ok, true);
   assert.equal((await emitAck(first, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 4 })).ok, true);
   assert.equal((await emitAck(first, 'update-route', {
     origin: { lat: -23.5, lng: -46.6 }, destination: { lat: -23.6, lng: -46.7 },
@@ -308,7 +367,9 @@ test('party legada preserva snapshot durante grace period e expira depois', asyn
     second?.disconnect();
     await new Promise((resolve) => server.io.close(resolve));
   });
-  await emitAck(first, 'join-party', { roomId: 'snapshot-1', name: 'Kaio' });
+  const participantToken = 'legacy_snapshot_token_abcdefghijklmnopqrstuvwxyz_123456';
+  await emitAck(first, 'join-party', { roomId: 'snapshot-1', name: 'Kaio', participantToken });
+  await emitAck(first, 'set-route-sharing-consent', { enabled: true });
   await emitAck(first, 'update-route', {
     origin: { lat: 1, lng: 2 }, destination: { lat: 3, lng: 4 },
     geometry: { type: 'LineString', coordinates: [[2, 1], [4, 3]] },
@@ -319,7 +380,7 @@ test('party legada preserva snapshot durante grace period e expira depois', asyn
   assert.equal(server.store.snapshot('snapshot-1').route.distance, 1500);
 
   second = await server.connect();
-  const recovered = await emitAck(second, 'join-party', { roomId: 'snapshot-1', name: 'Kaio' });
+  const recovered = await emitAck(second, 'join-party', { roomId: 'snapshot-1', name: 'Kaio', participantToken });
   assert.equal(recovered.snapshot.route.distance, 1500);
   assert.equal(recovered.snapshot.participants.length, 1);
   second.disconnect();
@@ -342,6 +403,8 @@ test('personal reroute preserves shared route, returns ETA and notifies only its
   t.after(async () => { ana.disconnect(); bia.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
   const joinedAna = await emitAck(ana, 'join-party', { roomId: 'personal-1', name: 'Ana' });
   await emitAck(bia, 'join-party', { roomId: 'personal-1', name: 'Bia' });
+  await emitAck(ana, 'set-route-sharing-consent', { enabled: true });
+  await emitAck(bia, 'set-route-sharing-consent', { enabled: true });
 
   const shared = await emitAck(ana, 'update-route', {
     origin: { lat: -23.5, lng: -46.6 }, destination: { lat: -23.6, lng: -46.7 }
@@ -406,4 +469,135 @@ test('personal reroute requires a location and invalid scope is rejected', async
   assert.equal(missingLocation.code, 'LOCATION_REQUIRED');
   assert.equal((await emitAck(client, 'update-route', { ...route, scope: 'private' })).ok, false);
   assert.equal(server.store.snapshot('personal-2').route, null);
+});
+
+test('participante pode ocultar a posição e alterar a visibilidade', async (t) => {
+  const server = await startServer();
+  const clients = [];
+  t.after(async () => {
+    clients.forEach((client) => client.disconnect());
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+  const hidden = await server.connect(); const viewer = await server.connect(); clients.push(hidden, viewer);
+  await emitAck(hidden, 'join-party', { roomId: 'privacidade-1', name: 'Oculto', visible: false });
+  const snapshotPromise = once(hidden, 'participants-snapshot');
+  const viewerSnapshotPromise = once(viewer, 'participants-snapshot');
+  await emitAck(viewer, 'join-party', { roomId: 'privacidade-1', name: 'Visivel' });
+  const snapshot = await snapshotPromise;
+  const viewerSnapshot = await viewerSnapshotPromise;
+  const pausedViewerParticipant = viewerSnapshot.participants.find((participant) => participant.name === 'Oculto');
+  assert.equal(pausedViewerParticipant.visible, false);
+  assert.equal(pausedViewerParticipant.sharingPaused, true);
+  const hiddenParticipant = snapshot.participants.find((participant) => participant.name === 'Oculto');
+  assert.equal(hiddenParticipant.visible, false);
+  assert.equal(hiddenParticipant.location, null);
+  let received = false;
+  viewer.once('participant-location', () => { received = true; });
+  assert.equal((await emitAck(hidden, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 8 })).ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(received, false);
+  assert.equal((await emitAck(hidden, 'set-visibility', { visible: true })).ok, true);
+});
+
+test('clientes AGUIA usam o mapa global e pausa conserva a ultima posicao', async (t) => {
+  const server = await startServer();
+  const clients = [];
+  t.after(async () => {
+    clients.forEach((client) => client.disconnect());
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+  const android = await server.connect();
+  const ios = await server.connect();
+  clients.push(android, ios);
+
+  await emitAck(android, 'join-party', { roomId: 'aparelho-android', clientCode: 'AGUIA', name: 'A-Android' });
+  const snapshotPromise = once(ios, 'participants-snapshot');
+  await emitAck(ios, 'join-party', { roomId: 'aparelho-ios', clientCode: 'AGUIA', name: 'A-iPhone' });
+  const joinedSnapshot = await snapshotPromise;
+  assert.equal(joinedSnapshot.roomId, 'global');
+  assert.deepEqual(joinedSnapshot.participants.map((participant) => participant.name).sort(), ['A-Android', 'A-iPhone']);
+
+  await emitAck(android, 'send-location', { lat: -23.5505, lng: -46.6333, accuracy: 8 });
+  const pausedSnapshotPromise = once(ios, 'participants-snapshot');
+  await emitAck(android, 'set-visibility', { visible: false });
+  const pausedSnapshot = await pausedSnapshotPromise;
+  const paused = pausedSnapshot.participants.find((participant) => participant.name === 'A-Android');
+  assert.equal(paused.visible, false);
+  assert.equal(paused.sharingPaused, true);
+  assert.equal(paused.location.lat, -23.5505);
+  assert.equal(paused.location.lng, -46.6333);
+});
+test('SOS confirmado notifica os demais participantes da party', async (t) => {
+  const server = await startServer();
+  const clients = [];
+  t.after(async () => {
+    clients.forEach((client) => client.disconnect());
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+  const ana = await server.connect(); const bia = await server.connect(); clients.push(ana, bia);
+  await emitAck(ana, 'join-party', { roomId: 'sos-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'sos-1', name: 'Bia' });
+  const signal = once(bia, 'sos-signal');
+  const ack = await emitAck(ana, 'send-sos-signal', { messageId: 'sos-12345678', message: 'SOS — preciso de ajuda' });
+  const received = await signal;
+  assert.equal(ack.ok, true);
+  assert.equal(received.participantName, 'Ana');
+  assert.equal(received.messageId, 'sos-12345678');
+  assert.equal(received.message, 'SOS — preciso de ajuda');
+});
+
+test('participante envia mensagem direta ao selecionar outro participante', async (t) => {
+  const server = await startServer();
+  const clients = [];
+  t.after(async () => {
+    clients.forEach((client) => client.disconnect());
+    await new Promise((resolve) => server.io.close(resolve));
+  });
+  const ana = await server.connect(); const bia = await server.connect(); clients.push(ana, bia);
+  const anaJoin = await emitAck(ana, 'join-party', { roomId: 'mensagem-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'mensagem-1', name: 'Bia' });
+  const target = server.store.snapshot('mensagem-1').participants.find((participant) => participant.name === 'Bia');
+  const receivedPromise = once(bia, 'direct-message');
+  const ack = await emitAck(ana, 'send-direct-message', { targetParticipantId: target.id, text: 'Tudo certo?' });
+  const received = await receivedPromise;
+  assert.equal(ack.ok, true);
+  assert.equal(received.senderParticipantId, anaJoin.participantId);
+  assert.equal(received.senderName, 'Ana');
+  assert.equal(received.text, 'Tudo certo?');
+});
+
+test('convite de rota pendente Ã© reenviado quando o participante retorna', async (t) => {
+  const server = await startServer({ disconnectGraceMs: 50 });
+  const clients = [];
+  t.after(async () => { clients.forEach((client) => client.disconnect()); await new Promise((resolve) => server.io.close(resolve)); });
+  const owner = await server.connect();
+  const target = await server.connect();
+  clients.push(owner, target);
+  const ownerToken = 'a'.repeat(32);
+  const targetToken = 'b'.repeat(32);
+  const roomId = 'route-reinvite-1';
+  const ownerJoin = await emitAck(owner, 'join-party', { roomId, name: 'Ana', participantToken: ownerToken });
+  const targetJoin = await emitAck(target, 'join-party', { roomId, name: 'Bia', participantToken: targetToken });
+  await emitAck(owner, 'send-location', { lat: -23.5, lng: -46.6, accuracy: 5, timestamp: Date.now() });
+  const route = await emitAck(owner, 'update-route', {
+    scope: 'personal',
+    origin: { lat: -23.5, lng: -46.6 },
+    destination: { lat: -23.6, lng: -46.7 }
+  });
+  assert.equal(route.ok, true);
+  const firstInvitation = once(target, 'route-share-invitation');
+  assert.equal((await emitAck(owner, 'request-route-share', { targetParticipantIds: [targetJoin.participantId] })).ok, true);
+  const invitation = await firstInvitation;
+  assert.equal((await emitAck(target, 'respond-route-share', { invitationId: invitation.invitationId, accepted: true })).ok, true);
+
+  target.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await emitAck(owner, 'request-route-share', { targetParticipantIds: [targetJoin.participantId] })).ok, true);
+
+  const returnedTarget = await server.connect();
+  clients.push(returnedTarget);
+  const returnedInvitation = once(returnedTarget, 'route-share-invitation');
+  const rejoin = await emitAck(returnedTarget, 'join-party', { roomId, name: 'Bia', participantToken: targetToken });
+  assert.equal(rejoin.participantId, targetJoin.participantId);
+  assert.equal((await returnedInvitation).participantId, ownerJoin.participantId);
 });

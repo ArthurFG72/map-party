@@ -1,10 +1,12 @@
 import { acceptsContractVersion, CONTRACT_VERSION, versioned } from './contracts.js';
-import { cleanLocationUpdate, cleanName, cleanParticipantToken, cleanRoomId, cleanRoute, cleanRouteIntent } from './validation.js';
+import { cleanDeviceId, cleanLocationUpdate, cleanName, cleanParticipantToken, cleanRoomId, cleanRoute, cleanRouteIntent, cleanVisibility } from './validation.js';
 import { PartyStore } from './partyStore.js';
 import { createRouteService } from './services/routeService.js';
 
 const LOCATION_RATE = { windowMs: 60_000, max: 30 };
+const MIN_LOCATION_BROADCAST_METERS = 3;
 const ROUTE_RATE = { windowMs: 60_000, max: 10 };
+const AGUIA_GLOBAL_ROOM = 'global';
 
 function reject(ack, message, code = 'INVALID_REQUEST', extra = {}) {
   if (typeof ack === 'function') ack(versioned({ ok: false, code, error: message, ...extra }));
@@ -18,6 +20,14 @@ function allowed(timestamps, { windowMs, max }) {
   return true;
 }
 
+function locationDistanceMeters(first, second) {
+  if (!first || !second) return Number.POSITIVE_INFINITY;
+  const latitude = (second.lat - first.lat) * Math.PI / 180;
+  const longitude = (second.lng - first.lng) * Math.PI / 180;
+  const a = Math.sin(latitude / 2) ** 2
+    + Math.cos(first.lat * Math.PI / 180) * Math.cos(second.lat * Math.PI / 180) * Math.sin(longitude / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 function personalEta(participantId, route, locationTimestamp) {
   return {
     participantId,
@@ -28,37 +38,155 @@ function personalEta(participantId, route, locationTimestamp) {
   };
 }
 
+function emitPartySnapshots(io, store, roomId) {
+  const room = store.rooms.get(roomId);
+  if (!room) return;
+  for (const [participantId, sockets] of room.participantSockets) {
+    for (const socketId of sockets) {
+      io.to(socketId).emit('participants-snapshot', versioned(store.snapshot(roomId, participantId)));
+    }
+  }
+}
+
 export function registerSocketHandlers(io, store = new PartyStore(), {
   routeService = createRouteService(),
-  disconnectGraceMs = 10_000
+  disconnectGraceMs = 10_000,
+  deviceAuth = null,
+  requireDeviceAuth = false,
+  recordCommandResult = null
 } = {}) {
   const graceMs = Number.isFinite(disconnectGraceMs) ? Math.max(0, Math.min(disconnectGraceMs, 60_000)) : 10_000;
   io.on('connection', (socket) => {
     const rate = { location: [], route: [] };
     socket.on('join-party', (payload, ack) => {
       if (!acceptsContractVersion(payload)) return reject(ack, 'Versão de contrato não suportada.', 'UNSUPPORTED_CONTRACT_VERSION');
-      const roomId = cleanRoomId(payload?.roomId);
+      const requestedRoomId = cleanRoomId(payload?.roomId);
+      const roomId = payload?.clientCode === 'AGUIA' ? AGUIA_GLOBAL_ROOM : requestedRoomId;
       const name = cleanName(payload?.name);
       const participantToken = payload?.participantToken == null ? null : cleanParticipantToken(payload.participantToken);
-      if (!roomId || !name || (payload?.participantToken != null && !participantToken)) {
+      const deviceId = payload?.deviceId == null ? null : cleanDeviceId(payload.deviceId);
+      const visible = cleanVisibility(payload?.visible);
+      if (!roomId || !name || (payload?.participantToken != null && !participantToken) || (payload?.deviceId != null && !deviceId)) {
         return reject(ack, 'Nome, código da party ou token de participante inválido.');
+      }
+      if (requireDeviceAuth && (!deviceId || !participantToken || !deviceAuth)) {
+        return reject(ack, 'Dispositivo autenticado obrigatório.', 'DEVICE_AUTH_REQUIRED');
       }
 
       const previous = store.roomFor(socket.id)?.roomId ?? null;
-      const joined = store.join(socket.id, roomId, name, participantToken);
+      const joined = store.join(socket.id, roomId, name, participantToken, visible);
       if (!joined) return reject(ack, 'A party atingiu o limite de participantes.');
       if (previous && previous !== roomId) socket.leave(previous);
       socket.join(roomId);
-      const snapshot = versioned(store.snapshot(roomId));
-      if (typeof ack === 'function') ack(versioned({ ok: true, participantId: joined.participant.id, snapshot }));
-      socket.to(roomId).emit('participants-snapshot', snapshot);
+      socket.data.deviceId = deviceId || null;
+      const deviceCredential = deviceId && participantToken && deviceAuth ? deviceAuth.issue({ deviceId, participantToken }) : null;
+      const snapshot = versioned(store.snapshot(roomId, joined.participant.id));
+      if (typeof ack === 'function') ack(versioned({ ok: true, participantId: joined.participant.id, snapshot, ...(deviceCredential ? { deviceCredential } : {}) }));
+      emitPartySnapshots(io, store, roomId);
       if (previous && previous !== roomId && store.rooms.has(previous)) {
-        io.to(previous).emit('participants-snapshot', versioned(store.snapshot(previous)));
+        emitPartySnapshots(io, store, previous);
+      }
+      for (const invitation of store.pendingRouteShareInvitations(roomId, joined.participant.id)) {
+        socket.emit('route-share-invitation', versioned(invitation));
       }
     });
 
+    socket.on('navigation-command-result', (payload) => {
+      const requestId = typeof payload?.request_id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(payload.request_id)
+        ? payload.request_id : null;
+      if (!socket.data.deviceId || !requestId || !payload || typeof payload.success !== 'boolean') return;
+      recordCommandResult?.(socket.data.deviceId, {
+        request_id: requestId,
+        success: payload.success,
+        status: payload.status === 'ok' ? 'ok' : 'error',
+        ...(typeof payload.action === 'string' ? { action: payload.action } : {}),
+        ...(typeof payload.command === 'string' ? { command: payload.command } : {}),
+        ...(typeof payload.code === 'string' ? { code: payload.code } : {}),
+        ...(payload.error && typeof payload.error === 'object' ? { error: payload.error } : {}),
+        ...(payload.result && typeof payload.result === 'object' ? { result: payload.result } : {})
+      });
+    });
+
+    socket.on('set-visibility', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      if (!membership || typeof payload?.visible !== 'boolean') return reject(ack, 'Visibilidade invÃ¡lida.');
+      const participant = membership.room.participants.get(membership.participantId);
+      participant.visible = payload.visible;
+      emitPartySnapshots(io, store, membership.roomId);
+      if (typeof ack === 'function') ack(versioned({ ok: true, visible: participant.visible }));
+    });
+
+    socket.on('set-route-sharing-consent', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      if (!membership || typeof payload?.enabled !== 'boolean') return reject(ack, 'Consentimento de rota inválido.');
+      const result = store.setRouteSharingConsent(socket.id, payload.enabled);
+      if (!result) return reject(ack, 'Participante fora da party.');
+      emitPartySnapshots(io, store, membership.roomId);
+      if (typeof ack === 'function') ack(versioned({ ok: true, enabled: result.participant.routeSharingConsent, ready: result.ready }));
+    });
+
+    socket.on('set-route-permission', (payload, ack) => {
+      const targetParticipantId = typeof payload?.targetParticipantId === 'string' ? payload.targetParticipantId.trim() : '';
+      const result = store.setRoutePermission(socket.id, targetParticipantId, payload?.enabled === true);
+      if (!result) return reject(ack, 'Participante de rota inválido.', 'INVALID_ROUTE_PERMISSION');
+      const ownerSocketIds = result.room.participantSockets.get(targetParticipantId) || new Set();
+      for (const ownerSocketId of ownerSocketIds) {
+        io.to(ownerSocketId).emit('route-permission-updated', versioned({
+          participantId: result.participantId,
+          targetParticipantId,
+          enabled: result.enabled
+        }));
+      }
+      if (result.enabled && result.route) {
+        socket.emit('route-shared', versioned({ participantId: targetParticipantId, route: result.route }));
+      } else if (!result.enabled) {
+        socket.emit('route-shared', versioned({ participantId: targetParticipantId, route: null }));
+      }
+      if (typeof ack === 'function') ack(versioned({ ok: true, enabled: result.enabled, targetParticipantId }));
+    });
+
+    socket.on('request-route-share', (payload, ack) => {
+      const targetParticipantIds = Array.isArray(payload?.targetParticipantIds)
+        ? payload.targetParticipantIds.filter((id) => typeof id === 'string').map((id) => id.trim()).slice(0, 50)
+        : [];
+      const result = store.createRouteShareInvitations(socket.id, targetParticipantIds);
+      if (!result) return reject(ack, 'Participante fora da party.', 'PARTY_NOT_FOUND');
+      if (!result.route) return reject(ack, 'Defina uma rota antes de compartilhá-la.', 'ROUTE_NOT_FOUND');
+      for (const invitation of result.invitations) {
+        const targetSockets = result.room.participantSockets.get(invitation.targetParticipantId) || new Set();
+        const target = result.room.participants.get(invitation.targetParticipantId);
+        for (const targetSocketId of targetSockets) {
+          io.to(targetSocketId).emit('route-share-invitation', versioned({
+            invitationId: invitation.invitationId,
+            participantId: result.participantId,
+            participantName: result.sender.name,
+            targetParticipantId: invitation.targetParticipantId,
+            destination: invitation.route.destination
+          }));
+        }
+      }
+      if (typeof ack === 'function') ack(versioned({ ok: true, invited: result.invitations.map((item) => item.targetParticipantId) }));
+    });
+
+    socket.on('respond-route-share', (payload, ack) => {
+      const invitationId = typeof payload?.invitationId === 'string' ? payload.invitationId.trim() : '';
+      const result = store.resolveRouteShareInvitation(socket.id, invitationId, payload?.accepted === true);
+      if (!result) return reject(ack, 'Convite de rota inválido ou expirado.', 'INVALID_ROUTE_INVITATION');
+      const senderSockets = result.room.participantSockets.get(result.invitation.senderParticipantId) || new Set();
+      for (const senderSocketId of senderSockets) {
+        io.to(senderSocketId).emit('route-share-response', versioned({
+          invitationId,
+          participantId: result.participantId,
+          accepted: result.accepted
+        }));
+      }
+      if (result.accepted) {
+        socket.emit('route-shared', versioned({ participantId: result.invitation.senderParticipantId, route: result.invitation.route }));
+      }
+      if (typeof ack === 'function') ack(versioned({ ok: true, accepted: result.accepted, route: result.accepted ? result.invitation.route : null }));
+    });
+
     socket.on('send-location', (payload, ack) => {
-      if (!allowed(rate.location, LOCATION_RATE)) return reject(ack, 'Muitas atualizações de localização. Aguarde um momento.');
       const membership = store.roomFor(socket.id);
       const update = cleanLocationUpdate(payload);
       if (!membership || !update) return reject(ack, 'Localização inválida ou participante fora da party.');
@@ -71,20 +199,32 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       const serverReceivedAt = Date.now();
       const location = { ...update.location, serverReceivedAt };
       const participant = membership.room.participants.get(membership.participantId);
+      if (participant.visible === false) {
+        if (typeof ack === 'function') ack(versioned({ ok: true, paused: true, locationSequence: previousSequence }));
+        return;
+      }
+      if (!allowed(rate.location, LOCATION_RATE)) return reject(ack, 'Muitas atualizações de localização. Aguarde um momento.');
+      const previousLocation = participant.location;
       participant.location = location;
       store.setLocationSequence(socket.id, locationSequence);
-      io.to(membership.roomId).emit('participant-location', versioned({ participantId: membership.participantId, location, locationSequence }));
-      if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence }));
+      const elapsed = previousLocation ? serverReceivedAt - Number(previousLocation.serverReceivedAt || 0) : Number.POSITIVE_INFINITY;
+      const moved = previousLocation ? locationDistanceMeters(previousLocation, location) : Number.POSITIVE_INFINITY;
+      if (moved >= MIN_LOCATION_BROADCAST_METERS || elapsed >= 10_000) {
+        socket.to(membership.roomId).emit('participant-location', versioned({ participantId: membership.participantId, location, locationSequence }));
+      }
+      if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence, ...(moved < MIN_LOCATION_BROADCAST_METERS && elapsed < 10_000 ? { unchanged: true } : {}) }));
     });
 
     socket.on('update-route', async (payload, ack) => {
-      if (!allowed(rate.route, ROUTE_RATE)) return reject(ack, 'Muitas atualizações de rota. Aguarde um momento.');
       const membership = store.roomFor(socket.id);
       const update = cleanRouteIntent(payload);
       if (!membership || !update) return reject(ack, 'Rota inválida ou participante fora da party.');
       const { commandId, routeRevision, scope } = update;
       const participant = membership.room.participants.get(membership.participantId);
       const locationTimestamp = participant?.location?.timestamp;
+      if (scope === 'shared' && !store.routeSharingConsented(membership.roomId)) {
+        return reject(ack, 'Todos os participantes devem consentir antes de compartilhar a rota.', 'ROUTE_SHARING_CONSENT_REQUIRED');
+      }
       if (scope === 'personal' && !Number.isSafeInteger(locationTimestamp)) {
         return reject(ack, 'Envie uma localização válida antes de recalcular sua navegação.', 'LOCATION_REQUIRED');
       }
@@ -102,6 +242,8 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
           currentRouteRevision: currentRevision
         });
       }
+      if (!allowed(rate.route, ROUTE_RATE)) return reject(ack, 'Muitas atualizacoes de rota. Aguarde um momento.');
+
       let route;
       try {
         const calculated = await routeService.calculate({
@@ -110,7 +252,10 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
           origin: update.origin,
           destination: update.destination
         });
-        route = cleanRoute(calculated);
+        route = cleanRoute({
+          ...calculated,
+          ...(update.routeOrigin ? { origin: update.routeOrigin } : {})
+        });
         if (!route) throw Object.assign(new Error('Invalid provider route'), { code: 'PROVIDER_ERROR' });
       } catch (error) {
         const timeout = error.code === 'PROVIDER_TIMEOUT';
@@ -152,7 +297,13 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       };
       store.rememberRouteCommand(activeMembership.roomId, commandKey, result);
       if (scope === 'personal') {
+        activeMembership.room.personalRoutes.set(activeMembership.participantId, enrichedRoute);
         socket.emit('navigation-rerouted', versioned(result));
+        for (const viewerParticipantId of store.viewersForRoute(activeMembership.roomId, activeMembership.participantId)) {
+          for (const viewerSocketId of activeMembership.room.participantSockets.get(viewerParticipantId) || []) {
+            io.to(viewerSocketId).emit('route-shared', versioned({ participantId: activeMembership.participantId, route: enrichedRoute }));
+          }
+        }
       } else {
         activeMembership.room.route = enrichedRoute;
         io.to(activeMembership.roomId).emit('route-updated', enrichedRoute);
@@ -160,16 +311,54 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       if (typeof ack === 'function') ack(versioned({ ok: true, ...result }));
     });
 
+    socket.on('send-sos-signal', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      const messageId = typeof payload?.messageId === 'string' ? payload.messageId.trim() : '';
+      const message = typeof payload?.message === 'string' ? payload.message.trim().slice(0, 160) : '';
+      if (!membership || !/^sos-[a-z0-9-]{8,80}$/i.test(messageId)) {
+        return reject(ack, 'Sinal SOS inválido.');
+      }
+      const participant = membership.room.participants.get(membership.participantId);
+      socket.to(membership.roomId).emit('sos-signal', versioned({
+        messageId,
+        message: message || 'SOS — preciso de ajuda',
+        participantId: membership.participantId,
+        participantName: participant?.name || 'Participante',
+        sentAt: Date.now()
+      }));
+      if (typeof ack === 'function') ack(versioned({ ok: true, messageId }));
+    });
+    socket.on('send-direct-message', (payload, ack) => {
+      const membership = store.roomFor(socket.id);
+      const targetParticipantId = typeof payload?.targetParticipantId === 'string' ? payload.targetParticipantId.trim() : '';
+      const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+      if (!membership || !targetParticipantId || !text) return reject(ack, 'Destinatario e mensagem sao obrigatorios.');
+      if (targetParticipantId === membership.participantId) return reject(ack, 'Escolha outro participante.');
+      const target = membership.room.participants.get(targetParticipantId);
+      const targetSockets = membership.room.participantSockets.get(targetParticipantId);
+      if (!target || !targetSockets?.size) return reject(ack, 'Participante indisponivel.', 'PARTICIPANT_UNAVAILABLE');
+      const sender = membership.room.participants.get(membership.participantId);
+      const message = versioned({
+        messageId: `dm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        senderParticipantId: membership.participantId,
+        senderName: sender?.name || 'Participante',
+        targetParticipantId,
+        text,
+        sentAt: Date.now()
+      });
+      for (const targetSocketId of targetSockets) io.to(targetSocketId).emit('direct-message', message);
+      if (typeof ack === 'function') ack(versioned({ ok: true, messageId: message.messageId }));
+    });
     socket.on('disconnect', () => {
       const disconnected = store.disconnect(socket.id);
       if (!disconnected) return;
       const { roomId, participantId, retained, participantRecoveryVersion, roomRecoveryVersion } = disconnected;
-      if (store.rooms.has(roomId)) io.to(roomId).emit('participants-snapshot', versioned(store.snapshot(roomId)));
+      if (store.rooms.has(roomId)) emitPartySnapshots(io, store, roomId);
       const timer = setTimeout(() => {
         const participantExpired = retained && store.expireParticipant(roomId, participantId, participantRecoveryVersion);
         const roomExpired = store.expireRoom(roomId, roomRecoveryVersion);
         if (participantExpired && !roomExpired && store.rooms.has(roomId)) {
-          io.to(roomId).emit('participants-snapshot', versioned(store.snapshot(roomId)));
+          emitPartySnapshots(io, store, roomId);
         }
       }, graceMs);
       timer.unref?.();

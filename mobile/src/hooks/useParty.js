@@ -194,6 +194,11 @@ export function useParty(roomId, name, visible = true) {
         relayEmergencyPacket(message.packet).catch(() => undefined);
       }
       if (message?.type === 'emergency' && message.messageId) {
+        setIncomingSos({
+          messageId: message.messageId,
+          participantName: message.participantName || 'Um participante',
+          message: message.message || 'SOS — preciso de ajuda'
+        });
         localTransport.send({ type: 'sos-ack', ackFor: message.messageId, participantId: name }).catch(() => undefined);
       }
     } });
@@ -427,15 +432,16 @@ export function useParty(roomId, name, visible = true) {
 
   const clearPersonalRoute = useCallback(() => setPersonalRoute(null), []);
 
-  const sendEmergencyPacket = useCallback(async (packet) => {
+  const sendEmergencyPacket = useCallback(async (packet, options = {}) => {
     const messageId = `sos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const message = String(options.message || 'SOS — preciso de ajuda').trim().slice(0, 160);
     pendingSosRef.current.set(messageId, new Set());
     setSosDelivery({ messageId, participants: [] });
-    await localTransportRef.current?.send({ type: 'emergency', messageId, participantId: participantIdRef.current, packet });
+    await localTransportRef.current?.send({ type: 'emergency', messageId, participantId: participantIdRef.current, participantName: name, message, packet });
     if (!socket.connected || !joinedRef.current) return { relayed: false, signalSent: false, messageId };
 
     const signal = await new Promise((resolve, reject) => {
-      socket.timeout(5_000).emit('send-sos-signal', { messageId }, (timeoutError, reply) => {
+      socket.timeout(5_000).emit('send-sos-signal', { messageId, message }, (timeoutError, reply) => {
         if (timeoutError) return reject(new Error('O servidor nao confirmou o SOS.'));
         if (!reply?.ok) return reject(new Error(reply?.error || 'O servidor rejeitou o SOS.'));
         resolve(reply);
@@ -443,7 +449,7 @@ export function useParty(roomId, name, visible = true) {
     });
     const relay = await relayEmergencyPacket(packet).catch(() => ({ relayed: false }));
     return { ...relay, signalSent: signal.ok === true, relayed: relay.relayed !== false, messageId };
-  }, [socket]);
+  }, [name, socket]);
 
   const sendDirectMessage = useCallback((targetParticipantId, text) => new Promise((resolve, reject) => {
     const message = String(text || '').trim().slice(0, 500);

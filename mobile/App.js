@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Component, useState } from 'react';
 import { DeviceEventEmitter, Linking, NativeModules, Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
 import HomeScreen from './src/screens/HomeScreen';
@@ -32,6 +32,31 @@ function installNativeTransport() {
 
 installNativeTransport();
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+  return btoa(binary);
+}
+
+function installNativeEmergencyCrypto() {
+  const nativeModule = NativeModules?.MapPartyEmergencyCrypto;
+  const expoModule = !nativeModule ? requireOptionalNativeModule('MapPartyEmergencyCrypto') : null;
+  const native = nativeModule || expoModule;
+  if (!native || globalThis.MapPartyEmergencyCrypto) return;
+  globalThis.MapPartyEmergencyCrypto = {
+    seal: async (publicKey, payload) => {
+      const ciphertext = await native.seal(publicKey.publicKeyPem, arrayBufferToBase64(payload));
+      return {
+        keyId: publicKey.keyId,
+        ciphertext: String(ciphertext).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      };
+    }
+  };
+}
+
+installNativeEmergencyCrypto();
+
 
 function webAppUrl() {
   if (typeof window === 'undefined') return 'https://18-228-44-32.sslip.io';
@@ -51,15 +76,36 @@ function WebFallback() {
   </View>;
 }
 
+class NativeRenderBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[MapParty] render failure', error, info?.componentStack || '');
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <View style={styles.renderFailure}>
+      <Text style={styles.renderFailureTitle}>Não foi possível abrir o mapa</Text>
+      <Text style={styles.renderFailureMessage}>O aplicativo continua aberto. Feche e abra novamente para tentar restaurar a sessão.</Text>
+      <Text selectable style={styles.renderFailureDetails}>{String(this.state.error?.message || this.state.error)}</Text>
+    </View>;
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   if (Platform.OS === 'web') return <WebFallback />;
-  return <>
+  return <NativeRenderBoundary><>
     <StatusBar barStyle={session ? 'light-content' : 'dark-content'} backgroundColor={session ? '#0b172a' : '#ffffff'} />
     {session
       ? <PartyScreen session={session} onLeave={() => setSession(null)} />
       : <HomeScreen onEnter={setSession} />}
-  </>;
+  </></NativeRenderBoundary>;
 }
 
 const styles = StyleSheet.create({
@@ -67,5 +113,9 @@ const styles = StyleSheet.create({
   webTitle: { color: '#0f172a', fontSize: 28, fontWeight: '800' },
   webMessage: { maxWidth: 420, marginTop: 10, color: '#475569', textAlign: 'center', lineHeight: 22 },
   webButton: { marginTop: 18, minHeight: 44, paddingHorizontal: 18, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#16a34a' },
-  webButtonText: { color: '#fff', fontWeight: '800' }
+  webButtonText: { color: '#fff', fontWeight: '800' },
+  renderFailure: { flex: 1, padding: 24, justifyContent: 'center', backgroundColor: '#0f172a' },
+  renderFailureTitle: { color: '#fff', fontSize: 22, fontWeight: '800', textAlign: 'center' },
+  renderFailureMessage: { marginTop: 12, color: '#cbd5e1', fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  renderFailureDetails: { marginTop: 18, color: '#fca5a5', fontSize: 11 }
 });

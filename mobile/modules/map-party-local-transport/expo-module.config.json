@@ -1,6 +1,9 @@
 {
-  "platforms": ["ios"],
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["MapPartyEmergencyCryptoModule"]
+  },
   "ios": {
-    "modules": ["MapPartyLocalTransportModule"]
+    "modules": ["MapPartyLocalTransportModule", "MapPartyEmergencyCryptoModule"]
   }
 }
