@@ -43,11 +43,17 @@ jobs:
         run: |
           set -euo pipefail
           npx expo-modules-autolinking search --platform ios --json > "$RUNNER_TEMP/autolinking-ios.json"
-          grep -q 'map-party-local-transport' "$RUNNER_TEMP/autolinking-ios.json"
-          grep -q 'MapPartyLocationModule' "$RUNNER_TEMP/autolinking-ios.json"
+          node - "$RUNNER_TEMP/autolinking-ios.json" <<'NODE'
+          const fs = require('node:fs');
+          const modules = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const transport = modules['map-party-local-transport'];
+          if (!transport?.config?.ios?.modules?.includes('MapPartyLocationModule')) {
+            throw new Error('MapPartyLocationModule não foi resolvido pelo autolinking iOS');
+          }
+          NODE
           PLIST="$(find ios -name Info.plist -print -quit)"
           test -n "$PLIST"
-          grep -q 'NSBonjourServices' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :NSBonjourServices' "$PLIST" >/dev/null
           grep -R -q 'MapPartyLocationModule' ios
 
       - name: Build unsigned device app
