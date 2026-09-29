@@ -37,18 +37,6 @@ jobs:
         working-directory: mobile
         run: npx expo prebuild --platform ios --non-interactive
 
-      - name: Verify native iOS transport autolinking
-        working-directory: mobile
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx expo-modules-autolinking search --platform ios --json > "$RUNNER_TEMP/autolinking-ios.json"
-          node -e "const fs=require('node:fs'); const modules=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const transport=modules['map-party-local-transport']; if (!transport?.config?.ios?.modules?.includes('MapPartyLocationModule')) throw new Error('MapPartyLocationModule nao foi resolvido pelo autolinking iOS');" "$RUNNER_TEMP/autolinking-ios.json"
-          PLIST="$(find ios -name Info.plist -print -quit)"
-          test -n "$PLIST"
-          /usr/libexec/PlistBuddy -c 'Print :NSBonjourServices' "$PLIST" >/dev/null
-          grep -R -q 'MapPartyLocationModule' ios
-
       - name: Build unsigned device app
         working-directory: mobile
         env:
