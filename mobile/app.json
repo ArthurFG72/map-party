@@ -60,18 +60,6 @@
       ]
     },
     "plugins": [
-      [
-        "expo-location",
-        {
-          "locationWhenInUsePermission": "Permitir que o Map Party use sua localização enquanto o app estiver aberto.",
-          "locationAlwaysAndWhenInUsePermission": "Permitir que o Map Party mantenha sua rota atualizada em segundo plano.",
-          "isIosBackgroundLocationEnabled": true,
-          "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true,
-          "locationWhenInUsePermission": "Permitir que o Map Party use sua localizacao enquanto o app estiver aberto.",
-          "locationAlwaysAndWhenInUsePermission": "Permitir que o Map Party mantenha sua rota atualizada em segundo plano."
-        }
-      ],
       "expo-sqlite",
       [
         "expo-speech-recognition",
