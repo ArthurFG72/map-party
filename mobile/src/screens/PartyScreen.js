@@ -687,7 +687,7 @@ export default function PartyScreen({ session, onLeave }) {
     point = { ...point, lat: latitude, lng: longitude };
     searchInputRef.current?.blur();
     Keyboard.dismiss();
-    let currentPosition = location.position;
+    let currentPosition = location.position || locationPositionRef.current;
     if (!currentPosition && (kind === 'origin' || (kind === 'destination' && !points.origin))) {
       setMessage('Obtendo a posição GPS para definir a rota…');
       currentPosition = await waitForLocationFix();
@@ -941,26 +941,36 @@ export default function PartyScreen({ session, onLeave }) {
     return submitAssistantToCloud('', depth + 1);
   }
 
-  function useMyLocation() {
-    if (!location.position) return setMessage('Aguardando uma posição do GPS.');
-    setPoint(activeKind, { lat: location.position.lat, lng: location.position.lng, label: 'Minha localização', source: 'geolocation' });
+  async function useMyLocation() {
+    let currentPosition = location.position || locationPositionRef.current;
+    if (!currentPosition) {
+      setMessage('Obtendo sua posição GPS…');
+      currentPosition = await waitForLocationFix();
+    }
+    if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a permissão de localização e tente novamente.');
+    await setPoint(activeKind, { lat: currentPosition.lat, lng: currentPosition.lng, label: 'Minha localização', source: 'geolocation' });
   }
 
-  function centerOnMyLocation() {
-    if (!location.position) return setMessage('Aguardando uma posição do GPS.');
+  async function centerOnMyLocation() {
+    let currentPosition = location.position || locationPositionRef.current;
+    if (!currentPosition) {
+      setMessage('Obtendo sua posição GPS…');
+      currentPosition = await waitForLocationFix();
+    }
+    if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a permissão de localização e tente novamente.');
     // Keep the camera centered on the same projected coordinate rendered by
     // the eagle while navigating, not on the raw GPS fix.
-    const center = ownMarkerLocation || location.position;
+    const center = ownMarkerLocation || currentPosition;
     const camera = {
       center: { latitude: center.lat, longitude: center.lng },
       zoom: 17,
-      ...(navigationActive ? { heading: cameraHeading(location.position, headingRef) } : {})
+      ...(navigationActive ? { heading: cameraHeading(currentPosition, headingRef) } : {})
     };
     mapRef.current?.animateCamera(camera, { duration: 500 });
   }
 
-  function waitForLocationFix(timeoutMs = 15_000) {
-    if (locationPositionRef.current) return Promise.resolve(locationPositionRef.current);
+  function waitForLocationFix(timeoutMs = 30_000) {
+    if (location.position || locationPositionRef.current) return Promise.resolve(location.position || locationPositionRef.current);
     return new Promise((resolve) => {
       const startedAt = Date.now();
       const timer = setInterval(() => {
@@ -980,7 +990,7 @@ export default function PartyScreen({ session, onLeave }) {
     Keyboard.dismiss();
     const routeToStart = routeOverride || navigationRoute;
     if (!routeToStart) return setMessage('Defina origem e destino primeiro.');
-    let currentPosition = location.position;
+    let currentPosition = location.position || locationPositionRef.current;
     if (!currentPosition) {
       setMessage('Obtendo a posição GPS para iniciar…');
       currentPosition = await waitForLocationFix();
