@@ -9,6 +9,7 @@ Pod::Spec.new do |s|
   s.description    = s.summary
   s.license        = { :type => 'MIT' }
   s.author         = { 'MAPS' => 'MAPS' }
+  s.homepage       = 'https://github.com/ArthurFG72/map-party'
   s.platforms      = { :ios => '15.1' }
   s.swift_version  = '5.9'
   s.source         = { :git => '' }
