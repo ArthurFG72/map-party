@@ -685,14 +685,19 @@ export default function PartyScreen({ session, onLeave }) {
     point = { ...point, lat: latitude, lng: longitude };
     searchInputRef.current?.blur();
     Keyboard.dismiss();
+    let currentPosition = location.position;
+    if (!currentPosition && (kind === 'origin' || (kind === 'destination' && !points.origin))) {
+      setMessage('Obtendo a posição GPS para definir a rota…');
+      currentPosition = await waitForLocationFix();
+    }
     if (kind === 'origin') {
-      if (!location.position) {
-        setMessage('Aguardando uma posição do GPS para definir a origem.');
+      if (!currentPosition) {
+        setMessage('Não foi possível obter uma posição GPS válida para definir a origem.');
         return;
       }
       point = {
-        lat: location.position.lat,
-        lng: location.position.lng,
+        lat: currentPosition.lat,
+        lng: currentPosition.lng,
         label: 'Minha localização atual',
         source: 'geolocation'
       };
@@ -701,9 +706,9 @@ export default function PartyScreen({ session, onLeave }) {
       setTemporaryStop(null);
       originalNavigationRouteRef.current = null;
     }
-    const currentOrigin = location.position ? {
-      lat: location.position.lat,
-      lng: location.position.lng,
+    const currentOrigin = currentPosition ? {
+      lat: currentPosition.lat,
+      lng: currentPosition.lng,
       label: 'Minha localização atual',
       source: 'geolocation'
     } : points.origin;
