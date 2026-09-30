@@ -52,9 +52,11 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
         return;
       }
       setPermissionGranted(true);
-      await setActiveTrackingRoom(shareLocation ? roomId : null);
-      if (shareLocation) await native.requestBackgroundPermission().catch(() => false);
+      // Start foreground GPS first. iOS may defer the Always/background
+      // authorization request; it must not block the first location fix.
       await native.start();
+      await setActiveTrackingRoom(shareLocation ? roomId : null);
+      if (shareLocation) native.requestBackgroundPermission().catch(() => false);
       if (mounted) setStatus('Localização nativa ativa');
     }
     start().catch((error) => mounted && setStatus(error?.message || 'Não foi possível iniciar o GPS nativo'));
