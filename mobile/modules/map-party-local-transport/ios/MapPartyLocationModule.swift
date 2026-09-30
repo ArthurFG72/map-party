@@ -58,11 +58,16 @@ public final class MapPartyLocationModule: Module {
     }
 
     AsyncFunction("start") {
-      self.delegate.manager.startUpdatingLocation()
+      DispatchQueue.main.async {
+        self.delegate.manager.startUpdatingLocation()
+        self.delegate.manager.requestLocation()
+      }
     }
 
     AsyncFunction("stop") {
-      self.delegate.manager.stopUpdatingLocation()
+      DispatchQueue.main.async {
+        self.delegate.manager.stopUpdatingLocation()
+      }
     }
   }
 
@@ -104,8 +109,10 @@ public final class MapPartyLocationModule: Module {
   private func waitForAuthorization(_ request: @escaping () -> Void) async -> Bool {
     await withCheckedContinuation { continuation in
       authorizationContinuation = continuation
-      request()
-      authorizationChanged(CLLocationManager.authorizationStatus())
+      DispatchQueue.main.async {
+        request()
+        self.authorizationChanged(CLLocationManager.authorizationStatus())
+      }
     }
   }
 
