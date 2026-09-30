@@ -1827,7 +1827,7 @@ export default function PartyScreen({ session, onLeave }) {
             </Pressable>
           </View>
         </View>
-        <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline || !party.locationSharingEnabled) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : party.locationSharingEnabled ? location.status : 'Compartilhamento pausado; movimento e GPS foram interrompidos.')}</Text>
+        <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.message, (party.error || message || party.offline || !party.locationSharingEnabled) && styles.warning]}>{party.error || message || (party.offline ? 'Sem conexão. Posições antigas aparecem como estimadas.' : location.status)}</Text>
         <Text onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright')} style={styles.attribution}>Busca: © contribuidores OpenStreetMap · rotas: OSRM</Text>
       </View>
     </KeyboardAvoidingView>}
