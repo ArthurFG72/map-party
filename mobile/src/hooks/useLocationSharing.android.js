@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { DeviceEventEmitter, Linking, NativeModules } from 'react-native';
-import { loadPermissionPrompted, markPermissionPrompted, setActiveTrackingRoom } from '../offlineStore';
+import { setActiveTrackingRoom } from '../offlineStore';
 
 const MAX_ACCEPTABLE_ACCURACY = 80;
 const MAX_LOCATION_AGE_MS = 120_000;
-const STATIONARY_SPEED = 0.8;
-const MIN_STATIONARY_MOVEMENT = 8;
+const STATIONARY_SPEED = 2.5;
+const MIN_STATIONARY_MOVEMENT = 20;
 const MAX_REALISTIC_SPEED = 90;
 
 function distanceMeters(first, second) {
@@ -17,11 +17,15 @@ function distanceMeters(first, second) {
 
 function stabilizePosition(previous, next) {
   if (!previous) return next;
+  if (next.timestamp <= previous.timestamp) return null;
   const elapsedSeconds = Math.max(0.1, (next.timestamp - previous.timestamp) / 1000);
   const distance = distanceMeters(previous, next);
   const reportedSpeed = Number.isFinite(next.speed) ? next.speed : 0;
   const accuracyLimit = Math.max(MIN_STATIONARY_MOVEMENT, Math.min(previous.accuracy || 0, next.accuracy || 0));
-  if (reportedSpeed < STATIONARY_SPEED && distance <= accuracyLimit) return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
+  const stationaryRadius = Math.min(35, Math.max(MIN_STATIONARY_MOVEMENT, accuracyLimit * 1.5));
+  // GPS jitter can report a small speed while the device is stopped. Keep the
+  // last coordinate until movement is materially larger than the uncertainty.
+  if (distance <= stationaryRadius && (reportedSpeed < STATIONARY_SPEED || distance <= 8)) return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
   const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);
   return distance > maximumDistance ? null : next;
 }
@@ -52,9 +56,12 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
     async function start() {
       if (!native) { setPermissionGranted(false); setStatus('GPS nativo indisponível'); return; }
       setStatus('Verificando localização...');
-      const prompted = await loadPermissionPrompted('location-foreground');
       const alreadyGranted = await native.isPermissionGranted();
-      const granted = alreadyGranted || (!prompted && await markPermissionPrompted('location-foreground').then(() => native.requestPermission()));
+      // A decisão persistida de “já perguntado” pode ficar desatualizada
+      // depois de Ajustes, atualização ou restauração do aparelho. A fonte
+      // de verdade é sempre o estado nativo atual; se não está concedido,
+      // deixe o Android decidir se deve mostrar o diálogo ou abrir Ajustes.
+      const granted = alreadyGranted || await native.requestPermission();
       if (!mounted) return;
       if (!granted) { setPermissionGranted(false); setStatus('Permita a localização nas configurações do Android'); return; }
       setPermissionGranted(true);
