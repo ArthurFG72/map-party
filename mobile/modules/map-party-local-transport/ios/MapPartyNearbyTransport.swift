@@ -1,4 +1,6 @@
 import Foundation
+
+#if canImport(NearbyConnections)
 import NearbyConnections
 
 final class MapPartyNearbyTransport: NSObject {
@@ -49,3 +51,24 @@ extension MapPartyNearbyTransport: ConnectionManagerDelegate {
   func connectionManager(_ connectionManager: ConnectionManager, didReceive data: Data, withID payloadID: PayloadID, from endpointID: EndpointID) { guard trusted.contains(endpointID), var object = validEnvelope(data), remember(fingerprint(data)) else { return }; object["endpointId"] = endpointID; object["payloadId"] = String(payloadID); onMessage?(object); let hops = Int(number(object["hops"]) ?? 0); if hops < Self.maxHops { object["hops"] = hops + 1; if let relay = try? JSONSerialization.data(withJSONObject: object) { _ = connectionManager.send(relay, to: trusted.filter { $0 != endpointID }) } } }
   func connectionManager(_ connectionManager: ConnectionManager, didChangeTo state: ConnectionState, for endpointID: EndpointID) { let text = String(describing: state).lowercased(); if text.contains("connected") { trusted.insert(endpointID) }; if text.contains("disconnected") || text.contains("rejected") { trusted.remove(endpointID) }; onPeer?(["endpointId": endpointID, "state": text]) }
 }
+#else
+// The location module must remain usable even when the optional Nearby
+// Connections Swift package is not linked by a particular iOS build.
+// JavaScript already queues local messages until a transport is available.
+// Keeping this small native fallback preserves that contract without making
+// GPS/navigation depend on the optional radio package.
+final class MapPartyNearbyTransport: NSObject {
+  var onMessage: (([String: Any]) -> Void)?
+  var onVerification: (([String: Any]) -> Void)?
+  var onPeer: (([String: Any]) -> Void)?
+
+  func start(roomID: String, participantID: String) {
+    guard !roomID.isEmpty, !participantID.isEmpty else { return }
+    onPeer?( ["state": "unavailable", "reason": "Nearby Connections não está disponível nesta compilação"] )
+  }
+
+  func stop() {}
+  func send(json: String) {}
+  func verify(endpointID: String, accepted: Bool) {}
+}
+#endif
