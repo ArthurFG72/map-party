@@ -11,9 +11,8 @@ on:
 
 jobs:
   build-ios-unsigned:
-    # macOS 26 Intel is intermittently unavailable before a job gets a
-    # runner. Use the stable Intel image for reproducible unsigned IPA builds.
-    runs-on: macos-15-intel
+    # Swift package `apple` requires Swift 6.2, provided by Xcode 26.6.
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
