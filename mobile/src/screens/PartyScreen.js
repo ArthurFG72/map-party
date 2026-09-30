@@ -269,12 +269,14 @@ export default function PartyScreen({ session, onLeave }) {
   const voiceHistoryRef = useRef({});
   const recognitionTrackRef = useRef(null);
   const lastRecognitionTimestampRef = useRef(0);
+  const locationPositionRef = useRef(null);
   const assistantHistoryRef = useRef([]);
   const categoryKey = activeCategories.join(',');
   const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
   // GPS local é necessário para busca por proximidade mesmo quando o usuário
   // optou por não compartilhar sua posição com a party.
   const location = useLocationSharing({ enabled: party.joined || navigationActive || Boolean(navigationRoute), roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  locationPositionRef.current = location.position;
   useEffect(() => {
     let active = true;
     if (!party.joined) return undefined;
@@ -950,20 +952,41 @@ export default function PartyScreen({ session, onLeave }) {
     mapRef.current?.animateCamera(camera, { duration: 500 });
   }
 
-  function startNavigation(routeOverride = null) {
+  function waitForLocationFix(timeoutMs = 15_000) {
+    if (locationPositionRef.current) return Promise.resolve(locationPositionRef.current);
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        if (locationPositionRef.current) {
+          clearInterval(timer);
+          resolve(locationPositionRef.current);
+        } else if (Date.now() - startedAt >= timeoutMs) {
+          clearInterval(timer);
+          resolve(null);
+        }
+      }, 250);
+    });
+  }
+
+  async function startNavigation(routeOverride = null) {
     searchInputRef.current?.blur();
     Keyboard.dismiss();
     const routeToStart = routeOverride || navigationRoute;
     if (!routeToStart) return setMessage('Defina origem e destino primeiro.');
-    if (!location.position) return setMessage('Aguardando uma posição do GPS para iniciar.');
+    let currentPosition = location.position;
+    if (!currentPosition) {
+      setMessage('Obtendo a posição GPS para iniciar…');
+      currentPosition = await waitForLocationFix();
+    }
+    if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a localização do iPhone e tente novamente.');
     offRouteReadingsRef.current = 0;
     if (!temporaryStop) originalNavigationRouteRef.current = routeToStart;
     routeOriginRef.current = routeToStart.origin || routeOriginRef.current;
     setNavigationLocked(false);
-    setNavigationGuidance(buildNavigationGuidance(routeToStart, location.position));
+    setNavigationGuidance(buildNavigationGuidance(routeToStart, currentPosition));
     transitionNavigationState({ type: 'navigation.start' });
     setMessage('Navegação iniciada. Siga a linha azul.');
-    mapRef.current?.animateToRegion({ latitude: location.position.lat, longitude: location.position.lng, latitudeDelta: 0.018, longitudeDelta: 0.018 }, 500);
+    mapRef.current?.animateToRegion({ latitude: currentPosition.lat, longitude: currentPosition.lng, latitudeDelta: 0.018, longitudeDelta: 0.018 }, 500);
   }
 
   async function addTemporaryStop(point) {
