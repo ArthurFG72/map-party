@@ -246,6 +246,7 @@ export default function PartyScreen({ session, onLeave }) {
   const [poiMessage, setPoiMessage] = useState('Aproxime o mapa para ver locais próximos.');
   const [selectedPoi, setSelectedPoi] = useState(null);
   const [mapStyle, setMapStyle] = useState('simple');
+  const [utilityMenuOpen, setUtilityMenuOpen] = useState(false);
   const [navigationState, transitionNavigationState] = useReducer(transitionNavigation, undefined, createNavigationState);
   const navigationActive = navigationState.navigation === NAVIGATION_STATE.NAVIGATING || navigationState.navigation === NAVIGATION_STATE.RECALCULATING;
   const [navigationLocked, setNavigationLocked] = useState(false);
@@ -1611,7 +1612,8 @@ export default function PartyScreen({ session, onLeave }) {
           {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); setShowSavedPlaces(true); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>{'\u00d7'}</Text></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
         </View>
-        <View style={styles.assistantRow}>
+         {utilityMenuOpen && <View style={styles.utilityMenu}>
+         <View style={styles.assistantRow}>
           <Text style={styles.assistantIcon}>◉</Text>
           <TextInput
             value={assistantDraft}
@@ -1643,7 +1645,8 @@ export default function PartyScreen({ session, onLeave }) {
           <Pressable accessibilityRole="button" accessibilityLabel="Marcar ponto de atenção no local atual" onPress={() => chooseAttentionPoint()} style={styles.recognitionButton}><Text style={styles.recognitionButtonText}>Marcar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Publicar percurso e pontos" onPress={publishRecognitionTrack} style={styles.recognitionPublishButton}><Text style={styles.recognitionButtonText}>Publicar</Text></Pressable>
         </View>
-        {query.trim().length > 0 && results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="always" nestedScrollEnabled>
+         </View>}
+         {query.trim().length > 0 && results.length > 0 && <ScrollView style={styles.floatingResults} keyboardShouldPersistTaps="always" nestedScrollEnabled>
           <Text accessibilityLiveRegion="polite" style={styles.resultsCount}>{results.length} resultado{results.length === 1 ? '' : 's'}</Text>
           {results.map((result) => {
             const details = searchResultDetails(result, location.position);
@@ -1710,6 +1713,7 @@ export default function PartyScreen({ session, onLeave }) {
             </View>;
           })}
         </ScrollView>}
+        {utilityMenuOpen && <View style={styles.utilityMenu}>
         {!navigationActive && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
           {POI_CATEGORIES.map((category) => {
             const active = activeCategories.includes(category.id);
@@ -1719,6 +1723,7 @@ export default function PartyScreen({ session, onLeave }) {
           })}
           <View style={styles.poiStatus}><Text numberOfLines={1} style={styles.poiStatusText}>{poiLoading ? 'Carregando…' : poiMessage}</Text></View>
         </ScrollView>}
+        </View>}
       </View>
       {selectedPoi && <View style={styles.poiCard}>
         <View style={styles.poiCardText}>
@@ -1784,7 +1789,8 @@ export default function PartyScreen({ session, onLeave }) {
         {!navigationActive && <View style={styles.segment}>
           <Pressable onPress={() => setActiveKind('origin')} style={[styles.segmentButton, activeKind === 'origin' && styles.originActive]}><Text style={[styles.segmentText, activeKind === 'origin' && styles.activeText]}>Origem</Text></Pressable>
           <Pressable onPress={() => setActiveKind('destination')} style={[styles.segmentButton, activeKind === 'destination' && styles.destinationActive]}><Text style={[styles.segmentText, activeKind === 'destination' && styles.activeText]}>Destino</Text></Pressable>
-          <Pressable onPress={useMyLocation} style={styles.locationButton}><Text style={styles.locationText}>Meu local</Text></Pressable>
+           <Pressable onPress={useMyLocation} style={styles.locationButton}><Text style={styles.locationText}>Meu local</Text></Pressable>
+           <Pressable accessibilityRole="button" accessibilityLabel={utilityMenuOpen ? 'Fechar opções adicionais' : 'Abrir opções adicionais'} accessibilityState={{ expanded: utilityMenuOpen }} onPress={() => setUtilityMenuOpen((open) => !open)} style={[styles.utilityMenuButton, utilityMenuOpen && styles.utilityMenuButtonActive]}><Text style={styles.utilityMenuButtonText}>{utilityMenuOpen ? '−' : '+'}</Text></Pressable>
         </View>}
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
@@ -1849,7 +1855,7 @@ const styles = StyleSheet.create({
   headerShareColumn: { width: 118, alignItems: 'stretch', gap: 2 },
   headerButton: { minHeight: 31, paddingHorizontal: 7, borderRadius: 10, justifyContent: 'center', backgroundColor: '#1a73e8' },
   headerButtonText: { color: '#fff', fontSize: 10, fontWeight: '800', textAlign: 'center' },
-  headerMicButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' },
+  headerMicButton: { display: 'none' },
   speedBadge: { minHeight: 18, paddingHorizontal: 5, borderRadius: 6, backgroundColor: '#172554', alignItems: 'center', justifyContent: 'center' }, speedBubble: { position: 'absolute', zIndex: 20, width: 88, height: 88, borderRadius: 44, backgroundColor: '#172554', borderWidth: 2, borderColor: '#bfdbfe', alignItems: 'center', justifyContent: 'center', shadowColor: '#0f172a', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 8 }, speedBubbleValue: { color: '#fff', fontSize: 30, lineHeight: 34, fontWeight: '900', textAlign: 'center' }, speedBubbleUnit: { color: '#bfdbfe', fontSize: 11, lineHeight: 14, fontWeight: '800', textAlign: 'center' },
   speedBadgeText: { color: '#bfdbfe', fontSize: 9, fontWeight: '900' },
   routeShareBackdrop: { flex: 1, backgroundColor: 'rgba(2, 8, 23, 0.62)', alignItems: 'center', justifyContent: 'center', padding: 22 },
@@ -1931,7 +1937,7 @@ const styles = StyleSheet.create({
   sharingButton: { minWidth: 72, minHeight: 40, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }, sharingButtonResume: { backgroundColor: '#dcfce7' }, sharingButtonText: { color: '#b91c1c', fontSize: 11, fontWeight: '900' }, sharingButtonTextResume: { color: '#166534' },
   segment: { flexDirection: 'row', gap: 7, marginBottom: 9 }, segmentButton: { flex: 1, minHeight: 40, borderRadius: 10, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
   originActive: { backgroundColor: '#16a34a' }, destinationActive: { backgroundColor: '#dc2626' }, segmentText: { color: '#334155', fontSize: 13, fontWeight: '700' }, activeText: { color: '#fff' },
-  locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },
+  locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' }, utilityMenuButton: { width: 40, minHeight: 40, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }, utilityMenuButtonActive: { backgroundColor: '#dbeafe' }, utilityMenuButtonText: { color: '#1e40af', fontSize: 25, lineHeight: 28, fontWeight: '700' }, utilityMenu: { marginBottom: 8, padding: 8, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
   result: { padding: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1' }, resultText: { color: '#334155', fontSize: 12, lineHeight: 17 }, disabled: { opacity: 0.45 },
   routeSummary: { marginTop: 7, color: '#1e40af', fontSize: 11, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 }, startNavigation: { flex: 1, minHeight: 38, borderRadius: 10, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, startNavigationText: { color: '#fff', fontSize: 12, fontWeight: '900' }, sosButton: { width: 52, minWidth: 52, minHeight: 36, borderRadius: 9, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' }, sosButtonSolo: { width: 60 }, sosButtonText: { color: '#fff', fontSize: 12, fontWeight: '900' }, message: { marginTop: 6, color: '#64748b', fontSize: 10 }, warning: { color: '#b45309' },
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
