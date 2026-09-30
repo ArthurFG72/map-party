@@ -1000,14 +1000,36 @@ export default function PartyScreen({ session, onLeave }) {
   async function startNavigation(routeOverride = null) {
     searchInputRef.current?.blur();
     Keyboard.dismiss();
+    let currentPosition = location.position || locationPositionRef.current;
+    if (!currentPosition) {
+      setMessage('Obtendo a posição GPS para iniciar…');
+      currentPosition = await waitForLocationFix();
+    }
+    if (!currentPosition) {
+      return setMessage('Não foi possível obter uma posição GPS válida. Verifique a localização do iPhone e tente novamente.');
+    }
+    const currentOrigin = points.origin || {
+      lat: currentPosition.lat,
+      lng: currentPosition.lng,
+      label: 'Minha localização atual',
+      source: 'geolocation'
+    };
+    const currentDestination = points.destination || routeOverride?.destination || navigationRoute?.destination;
+    if (!points.origin && currentDestination) {
+      const nextPoints = { ...points, origin: currentOrigin, destination: currentDestination };
+      setPoints(nextPoints);
+      routeOriginRef.current = currentOrigin;
+      savePartyPoints(session.roomId, nextPoints);
+    }
     let routeToStart = routeOverride || navigationRoute;
-    if (!routeToStart && points.origin && points.destination) {
+    if (!routeToStart && currentDestination) {
       setLoading(true);
       setMessage('Calculando rota para iniciar a navegação…');
       try {
-        routeToStart = await calculateRoute(points.origin, points.destination);
+        routeToStart = await calculateRoute(currentOrigin, currentDestination);
+        if (!routeToStart) throw new Error('O serviço não retornou uma rota válida.');
         setLocalRoute(routeToStart);
-        savePartyPoints(session.roomId, { origin: points.origin, destination: points.destination });
+        savePartyPoints(session.roomId, { origin: currentOrigin, destination: currentDestination });
       } catch (error) {
         setMessage(`Não foi possível calcular a rota: ${error.message}`);
         return;
@@ -1016,12 +1038,6 @@ export default function PartyScreen({ session, onLeave }) {
       }
     }
     if (!routeToStart) return setMessage('Defina origem e destino primeiro.');
-    let currentPosition = location.position || locationPositionRef.current;
-    if (!currentPosition) {
-      setMessage('Obtendo a posição GPS para iniciar…');
-      currentPosition = await waitForLocationFix();
-    }
-    if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a localização do iPhone e tente novamente.');
     offRouteReadingsRef.current = 0;
     if (!temporaryStop) originalNavigationRouteRef.current = routeToStart;
     routeOriginRef.current = routeToStart.origin || routeOriginRef.current;
