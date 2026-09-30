@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
-import { loadPermissionPrompted, markPermissionPrompted, setActiveTrackingRoom } from '../offlineStore';
+import { setActiveTrackingRoom } from '../offlineStore';
 import { stabilizePosition } from '../locationStabilization';
 
 const MAX_ACCEPTABLE_ACCURACY = 60;
@@ -20,7 +20,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
     let mounted = true;
     const native = requireOptionalNativeModule('MapPartyLocation');
     if (!native) {
-      setPermissionGranted(false);
+      setPermissionGranted(null);
       setStatus('GPS nativo iOS indisponível nesta versão');
       return undefined;
     }
@@ -36,13 +36,21 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       setStatus(`Precisão aproximada: ${Math.round(next.accuracy)} m`);
       callback.current(stable);
     });
+    const errorSubscription = emitter.addListener('onLocationError', (value) => {
+      if (mounted) setStatus(value?.message || 'O GPS nativo iOS informou um erro');
+    });
     async function start() {
       setStatus('Solicitando localização nativa…');
-      const prompted = await loadPermissionPrompted('location-foreground');
       const alreadyGranted = await native.isPermissionGranted();
-      const granted = alreadyGranted || (!prompted && await markPermissionPrompted('location-foreground').then(() => native.requestPermission()));
+      const granted = alreadyGranted || await native.requestPermission();
       if (!mounted) return;
-      if (!granted) { setPermissionGranted(false); setStatus('Permissão de localização negada'); return; }
+      if (!granted) {
+        let authorizationStatus = null;
+        try { authorizationStatus = await native.authorizationStatus?.(); } catch { /* Keep the generic status below. */ }
+        setPermissionGranted(false);
+        setStatus(`Permissão de localização negada no iOS${authorizationStatus ? ` (${authorizationStatus})` : ''}; abra os Ajustes`);
+        return;
+      }
       setPermissionGranted(true);
       await setActiveTrackingRoom(shareLocation ? roomId : null);
       if (shareLocation) await native.requestBackgroundPermission().catch(() => false);
@@ -50,7 +58,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       if (mounted) setStatus('Localização nativa ativa');
     }
     start().catch((error) => mounted && setStatus(error?.message || 'Não foi possível iniciar o GPS nativo'));
-    return () => { mounted = false; subscription.remove(); setActiveTrackingRoom(null); native.stop?.().catch?.(() => undefined); };
+    return () => { mounted = false; subscription.remove(); errorSubscription?.remove?.(); setActiveTrackingRoom(null); native.stop?.().catch?.(() => undefined); };
   }, [enabled, roomId, shareLocation]);
 
   return { position, status, permissionGranted, openSettings: () => Linking.openSettings().catch(() => undefined) };

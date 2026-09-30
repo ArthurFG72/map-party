@@ -45,6 +45,10 @@ public final class MapPartyLocationModule: Module {
       CLLocationManager.authorizationStatus() == .authorizedWhenInUse || CLLocationManager.authorizationStatus() == .authorizedAlways
     }
 
+    AsyncFunction("authorizationStatus") {
+      Self.authorizationStatusName(CLLocationManager.authorizationStatus())
+    }
+
     AsyncFunction("requestPermission") { () async -> Bool in
       await self.requestAuthorization(always: false)
     }
@@ -83,14 +87,36 @@ public final class MapPartyLocationModule: Module {
   }
 
   private func requestAuthorization(always: Bool) async -> Bool {
-    if always && CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
-      delegate.manager.requestAlwaysAuthorization()
-    } else if CLLocationManager.authorizationStatus() == .notDetermined {
-      delegate.manager.requestWhenInUseAuthorization()
+    let status = CLLocationManager.authorizationStatus()
+    if status == .authorizedAlways || (!always && status == .authorizedWhenInUse) { return true }
+    if status == .denied || status == .restricted { return false }
+    if always && status == .authorizedWhenInUse {
+      return await waitForAuthorization { self.delegate.manager.requestAlwaysAuthorization() }
     }
-    return await withCheckedContinuation { continuation in
+    if status == .notDetermined {
+      let granted = await waitForAuthorization { self.delegate.manager.requestWhenInUseAuthorization() }
+      if !always || !granted || CLLocationManager.authorizationStatus() != .authorizedWhenInUse { return granted }
+      return await waitForAuthorization { self.delegate.manager.requestAlwaysAuthorization() }
+    }
+    return false
+  }
+
+  private func waitForAuthorization(_ request: @escaping () -> Void) async -> Bool {
+    await withCheckedContinuation { continuation in
       authorizationContinuation = continuation
+      request()
       authorizationChanged(CLLocationManager.authorizationStatus())
+    }
+  }
+
+  private static func authorizationStatusName(_ status: CLAuthorizationStatus) -> String {
+    switch status {
+    case .notDetermined: return "notDetermined"
+    case .restricted: return "restricted"
+    case .denied: return "denied"
+    case .authorizedAlways: return "authorizedAlways"
+    case .authorizedWhenInUse: return "authorizedWhenInUse"
+    @unknown default: return "unknown"
     }
   }
 }
