@@ -1000,7 +1000,21 @@ export default function PartyScreen({ session, onLeave }) {
   async function startNavigation(routeOverride = null) {
     searchInputRef.current?.blur();
     Keyboard.dismiss();
-    const routeToStart = routeOverride || navigationRoute;
+    let routeToStart = routeOverride || navigationRoute;
+    if (!routeToStart && points.origin && points.destination) {
+      setLoading(true);
+      setMessage('Calculando rota para iniciar a navegação…');
+      try {
+        routeToStart = await calculateRoute(points.origin, points.destination);
+        setLocalRoute(routeToStart);
+        savePartyPoints(session.roomId, { origin: points.origin, destination: points.destination });
+      } catch (error) {
+        setMessage(`Não foi possível calcular a rota: ${error.message}`);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
     if (!routeToStart) return setMessage('Defina origem e destino primeiro.');
     let currentPosition = location.position || locationPositionRef.current;
     if (!currentPosition) {
@@ -1808,13 +1822,13 @@ export default function PartyScreen({ session, onLeave }) {
         <View style={styles.actionRow}>
           {!navigationActive && <Pressable
             accessibilityRole="button"
-            accessibilityLabel={navigationRoute ? 'Iniciar navegação' : 'Iniciar navegação, aguardando rota'}
-            accessibilityState={{ disabled: !navigationRoute || loading, busy: loading }}
-            disabled={!navigationRoute || loading}
+            accessibilityLabel={navigationRoute || (points.origin && points.destination) ? 'Iniciar navegação' : 'Iniciar navegação, aguardando origem e destino'}
+            accessibilityState={{ disabled: loading, busy: loading }}
+            disabled={loading}
             onPress={startNavigation}
-            style={[styles.startNavigation, (!navigationRoute || loading) && styles.disabled]}
+            style={[styles.startNavigation, loading && styles.disabled]}
           >
-            <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : 'Iniciar rota'}</Text>
+            <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : navigationRoute ? 'Iniciar rota' : 'Calcular e iniciar'}</Text>
           </Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Enviar SOS criptografado" accessibilityState={{ disabled: sosSending, busy: sosSending }} disabled={sosSending} onPress={sendSos} style={[styles.sosButton, (!navigationRoute || navigationActive) && styles.sosButtonSolo, sosSending && styles.disabled]}>
             <Text maxFontSizeMultiplier={1.1} style={styles.sosButtonText}>{sosSending ? 'Enviando...' : 'SOS'}</Text>
