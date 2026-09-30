@@ -43,6 +43,7 @@ jobs:
         env:
           EXPO_PUBLIC_SERVER_URL: https://18-228-44-32.sslip.io
         run: |
+          set -o pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
           test -n "$WORKSPACE"
           SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
@@ -54,7 +55,16 @@ jobs:
             -derivedDataPath ios/build-unsigned \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            build 2>&1 | tee ios/xcodebuild.log
+
+      - name: Upload iOS build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-party-ios-build-log
+          path: mobile/ios/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Package unsigned IPA
         working-directory: mobile
