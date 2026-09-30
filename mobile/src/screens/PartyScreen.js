@@ -308,7 +308,9 @@ export default function PartyScreen({ session, onLeave }) {
   const ownParticipantName = session.name.trim().toLocaleLowerCase('pt-BR');
   const ownParticipant = party.participants.find((item) => item.id === ownParticipantId);
   const searchLocation = location.position || null;
-  const ownLocation = party.locationSharingEnabled || navigationActive || Boolean(navigationRoute) ? location.position || ownParticipant?.location : null;
+  // A posição local é privada e deve continuar visível no próprio aparelho,
+  // mesmo quando o usuário não autorizou compartilhá-la com a party.
+  const ownLocation = location.position || ownParticipant?.location || null;
   const visualRoute = navigationRoute || displayedRoute;
   const ownMarkerLocation = useMemo(() => visualRoutePosition(visualRoute, ownLocation), [visualRoute, ownLocation]);
   const speedBubbleSize = 88;
@@ -1319,7 +1321,16 @@ export default function PartyScreen({ session, onLeave }) {
     addRecognitionAttention(trackId, locationPoint, type).then((item) => {
       if (!item) return;
       setAttentionPoints((current) => [...current, item]);
-      setMessage(`Ponto marcado: ${type}.`);
+      const reusablePlace = {
+        id: `attention:${item.id}`,
+        name: `Ponto: ${type}`,
+        label: `Ponto: ${type} · ${item.lat.toFixed(6)}, ${item.lng.toFixed(6)}`,
+        lat: item.lat,
+        lng: item.lng,
+        source: 'saved'
+      };
+      saveFavoritePlace(reusablePlace).then(setFavorites).catch(() => undefined);
+      setMessage(`Ponto marcado e salvo nos locais para usar como destino: ${type}.`);
     }).catch(() => setMessage('Não foi possível salvar o ponto.'));
   }
 
