@@ -3,16 +3,34 @@ import CoreLocation
 
 private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegate {
   weak var owner: MapPartyLocationModule?
-  let manager = CLLocationManager()
+  // CLLocationManager must be created and configured on the main thread.
+  // Expo may instantiate this module on a background queue during startup.
+  let manager: CLLocationManager
 
   override init() {
+    var createdManager: CLLocationManager!
+    if Thread.isMainThread {
+      createdManager = CLLocationManager()
+    } else {
+      DispatchQueue.main.sync {
+        createdManager = CLLocationManager()
+      }
+    }
+    manager = createdManager
     super.init()
-    manager.delegate = self
-    manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-    manager.distanceFilter = 1
-    manager.pausesLocationUpdatesAutomatically = false
-    manager.allowsBackgroundLocationUpdates = true
-    manager.showsBackgroundLocationIndicator = true
+    let configure = {
+      self.manager.delegate = self
+      self.manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+      self.manager.distanceFilter = 1
+      self.manager.pausesLocationUpdatesAutomatically = false
+      self.manager.allowsBackgroundLocationUpdates = true
+      self.manager.showsBackgroundLocationIndicator = true
+    }
+    if Thread.isMainThread {
+      configure()
+    } else {
+      DispatchQueue.main.sync(execute: configure)
+    }
   }
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {

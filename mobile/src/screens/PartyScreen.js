@@ -276,7 +276,9 @@ export default function PartyScreen({ session, onLeave }) {
   const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
   // GPS local é necessário para busca por proximidade mesmo quando o usuário
   // optou por não compartilhar sua posição com a party.
-  const location = useLocationSharing({ enabled: party.joined || navigationActive || Boolean(navigationRoute), roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  // O GPS local não pode depender do ACK do socket. A posição também é
+  // necessária para centralizar, pesquisar por proximidade e montar a rota.
+  const location = useLocationSharing({ enabled: true, roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
   locationPositionRef.current = location.position;
   useEffect(() => {
     let active = true;
@@ -743,11 +745,20 @@ export default function PartyScreen({ session, onLeave }) {
       setLoading(true);
       setMessage(kind === 'destination' ? 'Destino definido. Calculando rota…' : 'Calculando rota…');
       try {
-        const route = await party.publishRoute({
+        const requestedRoute = {
           profile: 'driving',
           origin: next.origin,
           destination: next.destination
-        });
+        };
+        let route;
+        try {
+          // Publica quando a party já está pronta; se o socket ainda estiver
+          // entrando ou offline, o cálculo local mantém a navegação utilizável.
+          route = await party.publishRoute(requestedRoute);
+        } catch (publishError) {
+          route = await calculateRoute(next.origin, next.destination);
+          if (!route) throw publishError;
+        }
         const baseOfflinePackage = createOfflineRoutePackage(route);
         let offlineGraph;
         try { offlineGraph = (await prepareOfflineGraph({ ...route, offlinePackageId: baseOfflinePackage?.id }))?.graph; } catch { offlineGraph = null; }
