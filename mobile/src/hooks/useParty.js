@@ -10,8 +10,6 @@ import { createLocalTransport } from '../localTransport';
 import { relayEmergencyPacket } from '../api';
 import { classifyConnectivity, connectivityCapabilities, CONNECTIVITY_LEVEL } from '../connectivity';
 
-const MAX_ESTIMATE_MS = 15 * 1000;
-const MIN_PROJECT_SPEED = 1.0;
 const EARTH_RADIUS_METERS = 6_371_000;
 const LOCATION_HEARTBEAT_MS = 10_000;
 const LOCATION_MIN_MOVEMENT_METERS = 4;
@@ -39,19 +37,9 @@ function compactLocation(location) {
 function projectLocation(location, now) {
   if (!location) return location;
   const ageMs = Math.max(0, now - Number(location.timestamp || now));
-  if (ageMs < 10_000) return { ...location, estimated: false, ageMs };
-  const speed = Number(location.speed);
-  const heading = Number(location.heading);
-  const canProject = Number.isFinite(speed) && speed >= MIN_PROJECT_SPEED && Number.isFinite(heading) && ageMs <= MAX_ESTIMATE_MS;
-  if (!canProject) return { ...location, estimated: true, stale: ageMs > 120_000, ageMs };
-
-  const seconds = Math.min(ageMs, MAX_ESTIMATE_MS) / 1000;
-  const distance = speed * seconds;
-  const headingRadians = (heading * Math.PI) / 180;
-  const latitudeRadians = (location.lat * Math.PI) / 180;
-  const lat = location.lat + (distance * Math.cos(headingRadians) / EARTH_RADIUS_METERS) * (180 / Math.PI);
-  const lng = location.lng + (distance * Math.sin(headingRadians) / (EARTH_RADIUS_METERS * Math.cos(latitudeRadians))) * (180 / Math.PI);
-  return { ...location, lat, lng, estimated: true, stale: ageMs > 120_000, ageMs };
+  // Never invent movement from a stale fix. The last real coordinate is kept
+  // visible and explicitly marked stale until a new GPS fix arrives.
+  return { ...location, estimated: ageMs >= 10_000, stale: ageMs > 120_000, ageMs };
 }
 
 export function useParty(roomId, name, visible = true) {

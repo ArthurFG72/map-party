@@ -280,7 +280,7 @@ export default function PartyScreen({ session, onLeave }) {
   // optou por não compartilhar sua posição com a party.
   // O GPS local não pode depender do ACK do socket. A posição também é
   // necessária para centralizar, pesquisar por proximidade e montar a rota.
-  const location = useLocationSharing({ enabled: true, roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
   locationPositionRef.current = location.position;
   useEffect(() => {
     let active = true;

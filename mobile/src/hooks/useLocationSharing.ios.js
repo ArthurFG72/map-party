@@ -7,7 +7,7 @@ import { stabilizePosition } from '../locationStabilization';
 const MAX_ACCEPTABLE_ACCURACY = 60;
 const MAX_LOCATION_AGE_MS = 120_000;
 
-export function useLocationSharing({ enabled, roomId, shareLocation = true, onLocation }) {
+export function useLocationSharing({ enabled, roomId, shareLocation = true, mode = 'tracking', onLocation }) {
   const [position, setPosition] = useState(null);
   const [permissionGranted, setPermissionGranted] = useState(null);
   const [status, setStatus] = useState('Localização pausada');
@@ -52,6 +52,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
         return;
       }
       setPermissionGranted(true);
+      await native.setMode?.(mode);
       // Start foreground GPS first. iOS may defer the Always/background
       // authorization request; it must not block the first location fix.
       await native.start();
@@ -61,7 +62,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
     }
     start().catch((error) => mounted && setStatus(error?.message || 'Não foi possível iniciar o GPS nativo'));
     return () => { mounted = false; subscription.remove(); errorSubscription?.remove?.(); setActiveTrackingRoom(null); native.stop?.().catch?.(() => undefined); };
-  }, [enabled, roomId, shareLocation]);
+  }, [enabled, mode, roomId, shareLocation]);
 
   return { position, status, permissionGranted, openSettings: () => Linking.openSettings().catch(() => undefined) };
 }

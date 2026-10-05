@@ -23,3 +23,20 @@ test('zera velocidade GPS residual quando o iOS permanece dentro do raio estacio
   );
   assert.equal(stable.speed, 0);
 });
+
+test('descarta leitura GPS fora de ordem sem mover o marcador', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 8, timestamp: 2_000, speed: 0 },
+    { lat: -23.5505, lng: -46.6305, accuracy: 8, timestamp: 1_000, speed: 20 }
+  );
+  assert.equal(stable, null);
+});
+
+test('não congela deslocamento real só porque o GPS informou velocidade residual baixa', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 0 },
+    { lat: -23.5503, lng: -46.6303, accuracy: 5, timestamp: 2_000, speed: 0.2 }
+  );
+  assert.notEqual(stable, null);
+  assert.equal(stable.lat, -23.5503);
+});

@@ -7,6 +7,15 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
   // Expo may instantiate this module on a background queue during startup.
   let manager: CLLocationManager
 
+  func configure(mode: String) {
+    let navigation = mode == "navigation" || mode == "boat"
+    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : (navigation ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters)
+    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 10)
+    manager.pausesLocationUpdatesAutomatically = !navigation
+    manager.activityType = mode == "navigation" ? .automotiveNavigation : (mode == "boat" ? .otherNavigation : .other)
+    manager.allowsBackgroundLocationUpdates = navigation || mode == "tracking"
+  }
+
   override init() {
     var createdManager: CLLocationManager!
     if Thread.isMainThread {
@@ -20,10 +29,7 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
     super.init()
     let configure = {
       self.manager.delegate = self
-      self.manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-      self.manager.distanceFilter = 1
-      self.manager.pausesLocationUpdatesAutomatically = false
-      self.manager.allowsBackgroundLocationUpdates = true
+      self.configure(mode: "tracking")
       self.manager.showsBackgroundLocationIndicator = true
     }
     if Thread.isMainThread {
@@ -73,6 +79,10 @@ public final class MapPartyLocationModule: Module {
 
     AsyncFunction("requestBackgroundPermission") { () async -> Bool in
       await self.requestAuthorization(always: true)
+    }
+
+    AsyncFunction("setMode") { (mode: String) in
+      DispatchQueue.main.async { self.delegate.configure(mode: mode) }
     }
 
     AsyncFunction("start") {

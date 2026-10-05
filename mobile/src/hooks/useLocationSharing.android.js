@@ -1,36 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { DeviceEventEmitter, Linking, NativeModules } from 'react-native';
 import { setActiveTrackingRoom } from '../offlineStore';
+import { stabilizePosition } from '../locationStabilization';
 
 const MAX_ACCEPTABLE_ACCURACY = 80;
 const MAX_LOCATION_AGE_MS = 120_000;
-const STATIONARY_SPEED = 2.5;
-const MIN_STATIONARY_MOVEMENT = 20;
-const MAX_REALISTIC_SPEED = 90;
 
-function distanceMeters(first, second) {
-  const lat = (second.lat - first.lat) * Math.PI / 180;
-  const lng = (second.lng - first.lng) * Math.PI / 180;
-  const a = Math.sin(lat / 2) ** 2 + Math.cos(first.lat * Math.PI / 180) * Math.cos(second.lat * Math.PI / 180) * Math.sin(lng / 2) ** 2;
-  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function stabilizePosition(previous, next) {
-  if (!previous) return next;
-  if (next.timestamp <= previous.timestamp) return null;
-  const elapsedSeconds = Math.max(0.1, (next.timestamp - previous.timestamp) / 1000);
-  const distance = distanceMeters(previous, next);
-  const reportedSpeed = Number.isFinite(next.speed) ? next.speed : 0;
-  const accuracyLimit = Math.max(MIN_STATIONARY_MOVEMENT, Math.min(previous.accuracy || 0, next.accuracy || 0));
-  const stationaryRadius = Math.min(35, Math.max(MIN_STATIONARY_MOVEMENT, accuracyLimit * 1.5));
-  // GPS jitter can report a small speed while the device is stopped. Keep the
-  // last coordinate until movement is materially larger than the uncertainty.
-  if (distance <= stationaryRadius && (reportedSpeed < STATIONARY_SPEED || distance <= 8)) return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
-  const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);
-  return distance > maximumDistance ? null : next;
-}
-
-export function useLocationSharing({ enabled, roomId, shareLocation = true, onLocation }) {
+export function useLocationSharing({ enabled, roomId, shareLocation = true, mode = 'tracking', onLocation }) {
   const [position, setPosition] = useState(null);
   const [status, setStatus] = useState('Localização pausada');
   const [permissionGranted, setPermissionGranted] = useState(null);
@@ -65,6 +41,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       if (!mounted) return;
       if (!granted) { setPermissionGranted(false); setStatus('Permita a localização nas configurações do Android'); return; }
       setPermissionGranted(true);
+      await native.setMode?.(mode);
       await setActiveTrackingRoom(shareLocation ? roomId : null);
       await native.start();
       if (mounted) setStatus('Localização ativa');
@@ -76,7 +53,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, onLo
       setActiveTrackingRoom(null);
       native?.stop?.().catch?.(() => undefined);
     };
-  }, [enabled, roomId, shareLocation]);
+  }, [enabled, mode, roomId, shareLocation]);
 
   return { position, status, permissionGranted, openSettings: () => Linking.openSettings().catch(() => undefined) };
 }
