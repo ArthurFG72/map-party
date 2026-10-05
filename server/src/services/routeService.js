@@ -1,10 +1,43 @@
 import { acceptsContractVersion, CONTRACT_VERSION } from '../contracts.js';
 import { cleanPoint, cleanRoute } from '../validation.js';
 
+const ROUTE_ENDPOINT_TOLERANCE_METERS = 300;
+const ROUTE_ENDPOINT_FALLBACK_TOLERANCE_METERS = 5_000;
+const MANEUVER_TOLERANCE_METERS = 180;
+
+function distanceMeters(first, second) {
+  const latitude = (second.lat - first.lat) * Math.PI / 180;
+  const longitude = (second.lng - first.lng) * Math.PI / 180;
+  const a = Math.sin(latitude / 2) ** 2
+    + Math.cos(first.lat * Math.PI / 180) * Math.cos(second.lat * Math.PI / 180) * Math.sin(longitude / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function endpointsWithinTolerance(candidate, origin, destination, toleranceMeters) {
+  const coordinates = candidate?.geometry?.coordinates;
+  if (!Array.isArray(coordinates) || coordinates.length < 2) return false;
+  const first = coordinates[0];
+  const last = coordinates.at(-1);
+  if (!Array.isArray(first) || !Array.isArray(last)) return false;
+  return distanceMeters({ lat: first[1], lng: first[0] }, origin) <= toleranceMeters
+    && distanceMeters({ lat: last[1], lng: last[0] }, destination) <= toleranceMeters;
+}
+
+function auditRouteGeometry(candidate, origin, destination) {
+  if (!endpointsWithinTolerance(candidate, origin, destination, ROUTE_ENDPOINT_TOLERANCE_METERS)) return false;
+  const coordinates = candidate.geometry.coordinates;
+  const maneuvers = (candidate.legs || []).flatMap((leg) => leg?.steps || [])
+    .map((step) => step?.maneuver?.location)
+    .filter((location) => Array.isArray(location) && location.length >= 2);
+  return maneuvers.every((location) => coordinates.some((coordinate) => Array.isArray(coordinate)
+    && distanceMeters({ lat: coordinate[1], lng: coordinate[0] }, { lat: location[1], lng: location[0] }) <= MANEUVER_TOLERANCE_METERS));
+}
+
 export function createRouteService({
   baseUrl = process.env.OSRM_BASE_URL || 'https://router.project-osrm.org',
   fetchImpl = fetch,
-  timeoutMs = 10_000
+  timeoutMs = 10_000,
+  trafficStore = null
 } = {}) {
   return {
     async calculate(payload) {
@@ -13,28 +46,47 @@ export function createRouteService({
       const { origin, destination } = requestRoute;
       const coordinates = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
       const url = new URL(`/route/v1/driving/${coordinates}`, baseUrl);
-      url.searchParams.set('overview', 'simplified');
+      url.searchParams.set('overview', 'full');
       url.searchParams.set('geometries', 'geojson');
       url.searchParams.set('steps', 'true');
+      url.searchParams.set('alternatives', 'true');
+      url.searchParams.set('continue_straight', 'false');
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetchImpl(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
         if (!response.ok) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
         const body = await response.json();
-        const candidate = body?.routes?.[0];
-        const legs = compactOsrmLegs(candidate?.legs);
-        const route = body?.code === 'Ok' && candidate && legs ? cleanRoute({
+        const providerCandidates = Array.isArray(body?.routes)
+          ? body.routes.filter((route) => Number.isFinite(route?.duration)
+            && compactOsrmLegs(route?.legs)
+            && endpointsWithinTolerance(route, origin, destination, ROUTE_ENDPOINT_FALLBACK_TOLERANCE_METERS))
+          : [];
+        // Geocoders may return a POI pin that OSRM snaps to the nearest
+        // accessible road. Prefer audited candidates, but keep the provider
+        // route when snapping exceeds the audit tolerance; rejecting every
+        // candidate made valid address searches fail with PROVIDER_ERROR.
+        const auditedCandidates = providerCandidates.filter((route) => auditRouteGeometry(route, origin, destination));
+        const candidates = auditedCandidates.length > 0 ? auditedCandidates : providerCandidates;
+        const scored = candidates.map((route) => ({ route, traffic: trafficStore?.evaluate(route) || null }));
+        const candidate = scored.sort((first, second) => {
+          const firstScore = first.traffic?.adjustedDuration || first.route.duration;
+          const secondScore = second.traffic?.adjustedDuration || second.route.duration;
+          return firstScore - secondScore;
+        })[0];
+        const selected = candidate?.route;
+        const legs = compactOsrmLegs(selected?.legs);
+        const route = body?.code === 'Ok' && selected && legs ? cleanRoute({
           contractVersion: CONTRACT_VERSION,
           origin,
           destination,
-          geometry: candidate.geometry,
-          distance: candidate.distance,
-          duration: candidate.duration,
+          geometry: selected.geometry,
+          distance: selected.distance,
+          duration: selected.duration,
           legs
         }) : null;
         if (!route) throw Object.assign(new Error('Provider error'), { code: 'PROVIDER_ERROR' });
-        return route;
+        return candidate.traffic ? { ...route, traffic: candidate.traffic } : route;
       } catch (error) {
         if (error.name === 'AbortError') throw Object.assign(new Error('Provider timeout'), { code: 'PROVIDER_TIMEOUT' });
         if (error.code) throw error;

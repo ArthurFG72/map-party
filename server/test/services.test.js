@@ -133,6 +133,32 @@ test('serviço de rotas rejeita resposta OSRM sem steps válidos', async () => {
   }), { code: 'PROVIDER_ERROR' });
 });
 
+test('serviÃ§o de rotas preserva rota vÃ¡lida quando o provedor desloca o pino para a via', async () => {
+  const service = createRouteService({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        code: 'Ok',
+        routes: [{
+          geometry: { type: 'LineString', coordinates: [[0.004, 0], [0.014, 0]] },
+          distance: 1200,
+          duration: 180,
+          legs: [{
+            distance: 1200,
+            duration: 180,
+            steps: [{ maneuver: { type: 'depart', location: [0.004, 0] }, distance: 1200, duration: 180 }]
+          }]
+        }]
+      })
+    })
+  });
+  const route = await service.calculate({
+    profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 0, lng: 0.01 }
+  });
+  assert.equal(route.distance, 1200);
+  assert.equal(route.destination.lng, 0.01);
+});
+
 test('POIs valida bbox, normaliza centros de ways e deduplica resultados', async () => {
   assert.equal(normalizePoiRequest({ bbox: '-49,-26,-48,-25', categories: 'restaurant', limit: 10 }).limit, 10);
   assert.equal(normalizePoiRequest({ bbox: 'invalido' }), null);
