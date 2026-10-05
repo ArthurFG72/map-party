@@ -1510,6 +1510,10 @@ export default function PartyScreen({ session, onLeave }) {
   const favoriteIds = useMemo(() => new Set(favorites.map((place) => place.storageId)), [favorites]);
   const recentWithoutFavorites = useMemo(() => recentPlaces.filter((place) => !favoriteIds.has(place.storageId)), [favoriteIds, recentPlaces]);
   const progressPercent = Math.round((navigationGuidance?.progress || 0) * 100);
+  const routeDistance = Number(navigationRoute?.distance);
+  const traveledMeters = navigationGuidance && Number.isFinite(routeDistance)
+    ? Math.max(0, Math.min(routeDistance, routeDistance * (navigationGuidance.progress || 0)))
+    : null;
   const connection = party.offline
     ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
     : CONNECTION_PRESENTATION[party.connectionStatus] || CONNECTION_PRESENTATION.connecting;
@@ -1682,8 +1686,9 @@ export default function PartyScreen({ session, onLeave }) {
         <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position)}</Text>
         <Text style={styles.speedBubbleUnit}>km/h</Text>
       </View>}
-      {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute]}>
+      {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
         <View style={styles.navigationCardText}>
+          <Text style={styles.navigationTraveled}>Percorrido: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
           <Text style={styles.navigationEyebrow}>{navigationGuidance?.precisionMode ? 'DETALHE DA MANOBRA' : navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
           <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
@@ -1699,7 +1704,7 @@ export default function PartyScreen({ session, onLeave }) {
               <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
             </Pressable>
           </>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posicao atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text style={styles.centerNavigationText}>Centralizar</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posicao atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text style={styles.centerNavigationText}>Central-{`\n`}izar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" accessibilityState={{ disabled: navigationLocked }} disabled={navigationLocked} onPress={stopNavigation} style={[styles.stopNavigation, navigationLocked && styles.disabled]}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
         </View>
         <View style={styles.lockedActions}>
@@ -2072,5 +2077,10 @@ const styles = StyleSheet.create({
   result: { padding: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1' }, resultText: { color: '#334155', fontSize: 12, lineHeight: 17 }, disabled: { opacity: 0.45 },
   routeSummary: { marginTop: 7, color: '#1e40af', fontSize: 11, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 }, startNavigation: { flex: 1, minHeight: 38, borderRadius: 10, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, startNavigationText: { color: '#fff', fontSize: 12, fontWeight: '900' }, sosButton: { width: 52, minWidth: 52, minHeight: 36, borderRadius: 9, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' }, sosButtonSolo: { width: 60 }, sosButtonText: { color: '#fff', fontSize: 12, fontWeight: '900' }, message: { marginTop: 6, color: '#64748b', fontSize: 10 }, warning: { color: '#b45309' },
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
-  pressed: { opacity: 0.72 }
+  pressed: { opacity: 0.72 },
+  personalRouteBadge: { display: 'none' }, navigationEyebrow: { display: 'none' },
+  navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#a9b8ca', fontSize: 10, fontWeight: '800', marginBottom: 2 },
+  navigationEta: { color: '#a9b8ca', fontSize: 10, marginTop: 3, paddingRight: '42%' },
+  navigationProgressTrack: { position: 'absolute', right: 0, bottom: 0, width: '38%', height: 4, marginTop: 0, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' },
+  centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center' }
 });
