@@ -1514,6 +1514,7 @@ export default function PartyScreen({ session, onLeave }) {
   const traveledMeters = navigationGuidance && Number.isFinite(routeDistance)
     ? Math.max(0, Math.min(routeDistance, routeDistance * (navigationGuidance.progress || 0)))
     : null;
+  const trafficSummary = navigationRoute?.traffic?.status === 'congestion' ? ' · trânsito colaborativo' : '';
   const connection = party.offline
     ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
     : CONNECTION_PRESENTATION[party.connectionStatus] || CONNECTION_PRESENTATION.connecting;
@@ -1919,7 +1920,7 @@ export default function PartyScreen({ session, onLeave }) {
            <Pressable accessibilityRole="button" accessibilityLabel={utilityMenuOpen ? 'Fechar opções adicionais' : 'Abrir opções adicionais'} accessibilityState={{ expanded: utilityMenuOpen }} onPress={() => setUtilityMenuOpen((open) => !open)} style={[styles.utilityMenuButton, utilityMenuOpen && styles.utilityMenuButtonActive]}><Text style={styles.utilityMenuButtonText}>{utilityMenuOpen ? '−' : '+'}</Text></Pressable>
         </View>}
 
-        {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
+        {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}{trafficSummary}</Text>}
         <View style={styles.actionRow}>
           {!navigationActive && completedRoute?.origin && <Pressable
             accessibilityRole="button"
