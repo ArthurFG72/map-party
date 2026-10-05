@@ -20,7 +20,11 @@ export function stabilizePosition(previous, next) {
   const accuracyLimit = Math.max(MIN_STATIONARY_MOVEMENT, Math.min(previous.accuracy || 0, next.accuracy || 0));
   const stationaryRadius = Math.min(35, Math.max(MIN_STATIONARY_MOVEMENT, accuracyLimit * 1.5));
   const measuredSpeed = distance / elapsedSeconds;
-  if (distance <= stationaryRadius && reportedSpeed < STATIONARY_SPEED && measuredSpeed < 1.2) {
+  // O valor de speed fornecido pelo sistema pode permanecer congelado por uma
+  // leitura quando o veículo para. A distância/tempo entre duas posições é a
+  // fonte de verdade para detectar a parada; não mantenha a velocidade antiga
+  // apenas porque o GPS repetiu um speed positivo.
+  if (distance <= stationaryRadius && measuredSpeed < 1.2) {
     return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
   }
   const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);

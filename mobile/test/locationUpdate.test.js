@@ -24,6 +24,14 @@ test('zera velocidade GPS residual quando o iOS permanece dentro do raio estacio
   assert.equal(stable.speed, 0);
 });
 
+test('zera velocidade mesmo quando o sistema repete um speed alto após a parada', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 10, timestamp: 1_000, speed: 18 / 3.6 },
+    { lat: -23.550001, lng: -46.630001, accuracy: 10, timestamp: 3_000, speed: 18 / 3.6 }
+  );
+  assert.equal(stable.speed, 0);
+});
+
 test('descarta leitura GPS fora de ordem sem mover o marcador', () => {
   const stable = stabilizePosition(
     { lat: -23.55, lng: -46.63, accuracy: 8, timestamp: 2_000, speed: 0 },

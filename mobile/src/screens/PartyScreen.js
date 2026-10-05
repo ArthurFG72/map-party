@@ -134,6 +134,11 @@ function formatDistance(meters) {
 }
 
 function formatSpeedValue(position) {
+  const timestamp = Number(position?.timestamp);
+  // Sem uma leitura recente não há velocidade atual confiável. Mostrar zero
+  // evita deixar congelada a última velocidade enquanto o aparelho está parado
+  // ou aguardando o próximo fix nativo.
+  if (!Number.isFinite(timestamp) || Date.now() - timestamp > 4_000) return '0';
   const speed = Number(position?.speed);
   return Number.isFinite(speed) && speed >= 0 ? String(Math.round(speed * 3.6)) : '--';
 }
@@ -319,8 +324,10 @@ export default function PartyScreen({ session, onLeave }) {
   // A posição local é privada e deve continuar visível no próprio aparelho,
   // mesmo quando o usuário não autorizou compartilhá-la com a party.
   const ownLocation = location.position || ownParticipant?.location || null;
-  const visualRoute = navigationRoute || displayedRoute;
-  const ownMarkerLocation = useMemo(() => visualRoutePosition(visualRoute, ownLocation), [visualRoute, ownLocation]);
+  // O marcador próprio representa o fix real do aparelho. A projeção na rota
+  // continua sendo usada para orientação e progresso, mas não pode "puxar"
+  // visualmente a águia para a rota antiga durante um recálculo.
+  const ownMarkerLocation = ownLocation;
   const speedBubbleSize = 88;
   const defaultSpeedBubbleLeft = Math.max(8, viewport.width - speedBubbleSize - 12);
   const speedBubblePositionRef = useRef({ left: defaultSpeedBubbleLeft, top: 12 });
