@@ -252,6 +252,7 @@ export default function PartyScreen({ session, onLeave }) {
   const [navigationLocked, setNavigationLocked] = useState(false);
   const [navigationGuidance, setNavigationGuidance] = useState(null);
   const [completedRoute, setCompletedRoute] = useState(null);
+  const [mapRefreshKey, setMapRefreshKey] = useState(0);
   const [recalculating, setRecalculating] = useState(false);
   const [sosSending, setSosSending] = useState(false);
   const poiRequestRef = useRef(0);
@@ -641,12 +642,13 @@ export default function PartyScreen({ session, onLeave }) {
       const returningToApp = (appStateRef.current === 'background' || appStateRef.current === 'inactive')
         && nextState === 'active';
       appStateRef.current = nextState;
-      if (!returningToApp || !navigationActive || !location.position) return;
+      if (!returningToApp || !displayedRoute || !location.position) return;
       const position = location.position;
       const maneuver = navigationGuidance?.precisionMode && navigationGuidance.maneuverPoint
         ? navigationGuidance.maneuverPoint
         : null;
       clearTimeout(restoreMapTimerRef.current);
+      setMapRefreshKey((current) => current + 1);
       restoreMapTimerRef.current = setTimeout(() => {
         mapRef.current?.animateCamera({
           center: {
@@ -662,7 +664,7 @@ export default function PartyScreen({ session, onLeave }) {
       subscription.remove();
       clearTimeout(restoreMapTimerRef.current);
     };
-  }, [location.position, navigationActive, navigationGuidance?.precisionMode, navigationGuidance?.maneuverPoint?.lat, navigationGuidance?.maneuverPoint?.lng]);
+  }, [displayedRoute, location.position, navigationActive, navigationGuidance?.precisionMode, navigationGuidance?.maneuverPoint?.lat, navigationGuidance?.maneuverPoint?.lng]);
 
 
 
@@ -1514,6 +1516,7 @@ export default function PartyScreen({ session, onLeave }) {
 
      <View style={styles.mapArea}>
        <MapView
+        key={mapRefreshKey}
         ref={mapRef}
         style={styles.map}
         initialRegion={INITIAL_REGION}
@@ -1551,7 +1554,16 @@ export default function PartyScreen({ session, onLeave }) {
           setPoint(activeKind, { lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
         }}
       >
-        {Platform.OS === 'android' && <UrlTile key={mapStyle} urlTemplate={MAP_TILE_TEMPLATES[mapStyle]} maximumZ={19} minimumZ={1} zIndex={-1} />}
+        {Platform.OS === 'android' && <>
+          <UrlTile key={`online:${mapStyle}:${mapRefreshKey}`} urlTemplate={MAP_TILE_TEMPLATES[mapStyle]} maximumZ={19} minimumZ={1} zIndex={-1} />
+          {mapStyle === 'simple' && offlineTileTemplate && <UrlTile
+            key={`offline:${offlineTileTemplate}:${mapRefreshKey}`}
+            urlTemplate={offlineTileTemplate}
+            maximumZ={17}
+            minimumZ={11}
+            zIndex={0}
+          />}
+        </>}
         {recognitionCoordinates.length > 1 && <Polyline coordinates={recognitionCoordinates} strokeColor="#16a34a" strokeWidth={4} lineDashPattern={[8, 5]} />}
         {receivedRecognitionTracks.filter((track) => track.trackId !== recognitionTrack?.id).map((track) => <Polyline key={`exploration:${track.trackId}`} coordinates={track.points.map((point) => ({ latitude: point.lat, longitude: point.lng }))} strokeColor="#7c3aed" strokeWidth={4} lineDashPattern={[10, 6]} />)}
         {routeCoordinates.length > 1 && <Polyline coordinates={routeCoordinates} strokeColor="#ffffff" strokeWidth={9} />}

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Directory, File, Paths } from 'expo-file-system';
 import { SERVER_URL } from './config';
 
-const TILE_ZOOM = 13;
-const MAX_TILES = 64;
+const TILE_ZOOMS = [11, 12, 13, 14, 15, 16, 17];
+const MAX_TILES_PER_ZOOM = 48;
 const TILE_ROOT = new Directory(Paths.document, 'map-party-tiles');
 export const MAP_TILE_TEMPLATES = {
   simple: `${SERVER_URL}/api/map-tiles/simple/{z}/{x}/{y}.png?v=gray2`,
@@ -53,7 +53,7 @@ function tileFile(tile) {
 export async function prepareOfflineRouteTiles(route) {
   try {
     TILE_ROOT.create({ intermediates: true, idempotent: true });
-    const tiles = routeTileKeys(route);
+    const tiles = TILE_ZOOMS.flatMap((zoom) => routeTileKeys(route, zoom, MAX_TILES_PER_ZOOM));
     for (const tile of tiles) {
       const file = tileFile(tile);
       if (file.exists) continue;
