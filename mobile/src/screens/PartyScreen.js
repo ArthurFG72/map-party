@@ -13,6 +13,7 @@ import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from
 import { assistantReplyForIntent, parseAssistantIntent } from '../assistantIntent';
 import { useSpeechAssistant } from '../hooks/useSpeechAssistant';
 import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
+import { buildReturnPoints } from '../routeReturn';
 import { calculatePackagedOfflineRoute } from '../offlineNavigation';
 import { createOfflineRoutePackage } from '../offlineRoutePackage';
 import { MAP_TILE_TEMPLATES, useOfflineRouteTiles } from '../offlineMapTiles';
@@ -265,6 +266,8 @@ export default function PartyScreen({ session, onLeave }) {
   const recalculationRef = useRef(false);
   const lastRecalculationAtRef = useRef(0);
   const lastNavigationCameraRef = useRef(null);
+  const lastFreeCameraPositionRef = useRef(null);
+  const completedOriginRef = useRef(null);
   const appStateRef = useRef(AppState.currentState);
   const restoreMapTimerRef = useRef(null);
   const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
@@ -551,7 +554,7 @@ export default function PartyScreen({ session, onLeave }) {
   }, [party.connectivity.capabilities.canLoadPois, party.connectivity.level, visibleRegion, categoryKey]);
 
   useEffect(() => {
-    if (!location.position || (party.route && !navigationActive)) return;
+    if (!location.position) return;
     if (navigationActive) {
       const maneuver = navigationGuidance?.precisionMode && navigationGuidance.maneuverPoint
         ? navigationGuidance.maneuverPoint
@@ -579,14 +582,23 @@ export default function PartyScreen({ session, onLeave }) {
       return;
     }
     lastNavigationCameraRef.current = null;
-    if (didCenterUserRef.current) return;
-    didCenterUserRef.current = true;
-    mapRef.current?.animateToRegion({
-      latitude: location.position.lat,
-      longitude: location.position.lng,
-      latitudeDelta: 0.04,
-      longitudeDelta: 0.04
-    }, 650);
+    const previous = lastFreeCameraPositionRef.current;
+    const movedEnough = !previous || distanceMeters(previous, location.position) >= 10;
+    if (!movedEnough) return;
+    lastFreeCameraPositionRef.current = { lat: location.position.lat, lng: location.position.lng };
+    if (!didCenterUserRef.current) {
+      didCenterUserRef.current = true;
+      mapRef.current?.animateToRegion({
+        latitude: location.position.lat,
+        longitude: location.position.lng,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04
+      }, 650);
+      return;
+    }
+    mapRef.current?.animateCamera({
+      center: { latitude: location.position.lat, longitude: location.position.lng }
+    }, { duration: 350 });
   }, [location.position, party.route, navigationActive, navigationGuidance?.precisionMode, navigationGuidance?.maneuverPoint?.lat, navigationGuidance?.maneuverPoint?.lng]);
 
   useEffect(() => {
@@ -605,7 +617,10 @@ export default function PartyScreen({ session, onLeave }) {
     }
     if (nextGuidance.arrived) {
       const finishedRoute = originalNavigationRouteRef.current || navigationRoute;
-      if (finishedRoute?.origin && finishedRoute?.destination) setCompletedRoute(finishedRoute);
+      if (finishedRoute?.origin && finishedRoute?.destination) {
+        completedOriginRef.current = { ...finishedRoute.origin };
+        setCompletedRoute(finishedRoute);
+      }
       stopNavigationVoice();
       voiceHistoryRef.current = {};
       setNavigationLocked(false);
@@ -1110,12 +1125,12 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   async function startReturnNavigation() {
-    const previous = completedRoute || originalNavigationRouteRef.current;
-    if (!previous?.origin) return setMessage('O ponto inicial da rota anterior não está disponível.');
     const current = location.position || locationPositionRef.current;
     if (!current) return setMessage('Aguardando uma posição GPS para iniciar a volta.');
-    const origin = { lat: current.lat, lng: current.lng, label: 'Minha localização atual', source: 'geolocation' };
-    const destination = previous.origin;
+    const previous = completedRoute || (completedOriginRef.current ? { origin: completedOriginRef.current } : originalNavigationRouteRef.current);
+    const points = buildReturnPoints(previous, current);
+    if (!points) return setMessage('O ponto inicial da rota anterior não está disponível.');
+    const { origin, destination } = points;
     setLoading(true);
     setMessage('Calculando a rota de volta…');
     try {
@@ -1124,6 +1139,7 @@ export default function PartyScreen({ session, onLeave }) {
       setPoints({ origin, destination });
       savePartyPoints(session.roomId, { origin, destination });
       setCompletedRoute(null);
+      completedOriginRef.current = null;
       originalNavigationRouteRef.current = route;
       routeOriginRef.current = origin;
       setNavigationGuidance(buildNavigationGuidance(route, current));
