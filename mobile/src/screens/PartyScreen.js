@@ -251,6 +251,7 @@ export default function PartyScreen({ session, onLeave }) {
   const navigationActive = navigationState.navigation === NAVIGATION_STATE.NAVIGATING || navigationState.navigation === NAVIGATION_STATE.RECALCULATING;
   const [navigationLocked, setNavigationLocked] = useState(false);
   const [navigationGuidance, setNavigationGuidance] = useState(null);
+  const [completedRoute, setCompletedRoute] = useState(null);
   const [recalculating, setRecalculating] = useState(false);
   const [sosSending, setSosSending] = useState(false);
   const poiRequestRef = useRef(0);
@@ -602,12 +603,16 @@ export default function PartyScreen({ session, onLeave }) {
       recalculateRoute({ automatic: true });
     }
     if (nextGuidance.arrived) {
+      const finishedRoute = originalNavigationRouteRef.current || navigationRoute;
+      if (finishedRoute?.origin && finishedRoute?.destination) setCompletedRoute(finishedRoute);
       stopNavigationVoice();
       voiceHistoryRef.current = {};
       setNavigationLocked(false);
       setNavigationGuidance(null);
       setLocalRoute(null);
-      setPoints({ origin: null, destination: null });
+      // Keep the completed route available so the next action can return to
+      // its original origin instead of losing the initial point.
+      setPoints({ origin: finishedRoute?.destination || null, destination: null });
       setQuery('');
       setResults([]);
       setActiveKind('destination');
@@ -1102,6 +1107,33 @@ export default function PartyScreen({ session, onLeave }) {
     }
   }
 
+  async function startReturnNavigation() {
+    const previous = completedRoute || originalNavigationRouteRef.current;
+    if (!previous?.origin) return setMessage('O ponto inicial da rota anterior não está disponível.');
+    const current = location.position || locationPositionRef.current;
+    if (!current) return setMessage('Aguardando uma posição GPS para iniciar a volta.');
+    const origin = { lat: current.lat, lng: current.lng, label: 'Minha localização atual', source: 'geolocation' };
+    const destination = previous.origin;
+    setLoading(true);
+    setMessage('Calculando a rota de volta…');
+    try {
+      const route = { ...(await calculateRoute(origin, destination)), origin, destination };
+      setLocalRoute(route);
+      setPoints({ origin, destination });
+      savePartyPoints(session.roomId, { origin, destination });
+      setCompletedRoute(null);
+      originalNavigationRouteRef.current = route;
+      routeOriginRef.current = origin;
+      setNavigationGuidance(buildNavigationGuidance(route, current));
+      transitionNavigationState({ type: 'navigation.start' });
+      setMessage('Rota de volta iniciada.');
+    } catch (error) {
+      setMessage(`Não foi possível calcular a rota de volta: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function stopNavigation() {
     stopNavigationVoice();
     voiceHistoryRef.current = {};
@@ -1188,7 +1220,10 @@ export default function PartyScreen({ session, onLeave }) {
   async function recalculateRoute({ automatic = false } = {}) {
     if (recalculationRef.current) return;
     if (party.joined && !party.connected && location.position && navigationRoute?.destination) {
-      const fixedOrigin = routeOriginRef.current || points.origin || navigationRoute.origin;
+      const fixedOrigin = originalNavigationRouteRef.current?.origin
+      || routeOriginRef.current
+      || points.origin
+      || navigationRoute.origin;
       const destination = points.destination || navigationRoute.destination;
       const offlinePackage = await loadOfflineRoutePackage(navigationRoute.offlinePackageId);
       const offlineResult = calculatePackagedOfflineRoute(offlinePackage, location.position, destination);
@@ -1214,7 +1249,10 @@ export default function PartyScreen({ session, onLeave }) {
       label: 'Minha localização atual',
       source: 'geolocation'
     };
-      const fixedOrigin = routeOriginRef.current || points.origin || navigationRoute.origin;
+    const fixedOrigin = originalNavigationRouteRef.current?.origin
+      || routeOriginRef.current
+      || points.origin
+      || navigationRoute.origin;
     const destination = points.destination || navigationRoute.destination;
     if (!fixedOrigin || !destination) {
       recalculationRef.current = false;
@@ -1230,9 +1268,16 @@ export default function PartyScreen({ session, onLeave }) {
         destination,
         routeOrigin: fixedOrigin
       }, 'personal');
-      const route = calculatedRoute;
+      const route = { ...calculatedRoute, origin: fixedOrigin, destination };
       setLocalRoute(route);
       routeOriginRef.current = fixedOrigin;
+      if (originalNavigationRouteRef.current) {
+        originalNavigationRouteRef.current = {
+          ...originalNavigationRouteRef.current,
+          origin: fixedOrigin,
+          destination
+        };
+      }
       savePartySnapshot(session.roomId, { participants: party.participants, route });
       setPoints({ origin: fixedOrigin, destination });
       savePartyPoints(session.roomId, { origin: fixedOrigin, destination });
@@ -1836,6 +1881,16 @@ export default function PartyScreen({ session, onLeave }) {
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}</Text>}
         <View style={styles.actionRow}>
+          {!navigationActive && completedRoute?.origin && <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Iniciar rota de volta ao ponto inicial"
+            accessibilityState={{ disabled: loading, busy: loading }}
+            disabled={loading}
+            onPress={startReturnNavigation}
+            style={[styles.startNavigation, loading && styles.disabled]}
+          >
+            <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : 'Voltar ao início'}</Text>
+          </Pressable>}
           {!navigationActive && <Pressable
             accessibilityRole="button"
             accessibilityLabel={navigationRoute || (points.origin && points.destination) ? 'Iniciar navegação' : 'Iniciar navegação, aguardando origem e destino'}
