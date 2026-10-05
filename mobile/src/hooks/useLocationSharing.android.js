@@ -18,9 +18,10 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
     if (!enabled) return undefined;
     let mounted = true;
     const native = NativeModules.MapPartyLocation;
+    const maxLocationAge = mode === 'navigation' || mode === 'boat' ? 15_000 : MAX_LOCATION_AGE_MS;
     const subscription = DeviceEventEmitter.addListener('MapPartyLocation', (value) => {
       const next = { lat: value.latitude, lng: value.longitude, accuracy: value.accuracy || 0, timestamp: value.timestamp || Date.now(), ...(Number.isFinite(value.speed) ? { speed: value.speed } : {}), ...(Number.isFinite(value.heading) ? { heading: value.heading } : {}) };
-      if (Date.now() - next.timestamp > MAX_LOCATION_AGE_MS || next.timestamp - Date.now() > 30_000) return;
+      if (Date.now() - next.timestamp > maxLocationAge || next.timestamp - Date.now() > 30_000) return;
       if (next.accuracy > MAX_ACCEPTABLE_ACCURACY && positionRef.current) return;
       const stable = stabilizePosition(positionRef.current, next);
       if (!stable) return;

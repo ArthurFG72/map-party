@@ -24,10 +24,11 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
       setStatus('GPS nativo iOS indisponível nesta versão');
       return undefined;
     }
+    const maxLocationAge = mode === 'navigation' || mode === 'boat' ? 15_000 : MAX_LOCATION_AGE_MS;
     const emitter = new EventEmitter(native);
     const subscription = emitter.addListener('onLocation', (value) => {
       const next = { lat: value.latitude, lng: value.longitude, accuracy: value.accuracy || 0, timestamp: value.timestamp || Date.now(), ...(Number.isFinite(value.speed) && value.speed >= 0 ? { speed: value.speed } : {}), ...(Number.isFinite(value.heading) && value.heading >= 0 ? { heading: value.heading } : {}) };
-      if (Date.now() - next.timestamp > MAX_LOCATION_AGE_MS || next.timestamp - Date.now() > 30_000) return;
+      if (Date.now() - next.timestamp > maxLocationAge || next.timestamp - Date.now() > 30_000) return;
       if (next.accuracy > MAX_ACCEPTABLE_ACCURACY && positionRef.current) return;
       const stable = stabilizePosition(positionRef.current, next);
       if (!stable) return;

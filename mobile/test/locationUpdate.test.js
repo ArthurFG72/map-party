@@ -40,6 +40,14 @@ test('descarta leitura GPS fora de ordem sem mover o marcador', () => {
   assert.equal(stable, null);
 });
 
+test('descarta salto quilométrico ao iniciar navegação com o aparelho parado', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 8, timestamp: 10_000, speed: 0 },
+    { lat: -23.532, lng: -46.63, accuracy: 8, timestamp: 12_000, speed: 0 }
+  );
+  assert.equal(stable, null);
+});
+
 test('não congela deslocamento real só porque o GPS informou velocidade residual baixa', () => {
   const stable = stabilizePosition(
     { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 0 },
