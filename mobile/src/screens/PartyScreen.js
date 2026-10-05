@@ -781,13 +781,17 @@ export default function PartyScreen({ session, onLeave }) {
         };
         let route;
         try {
-          // Publica quando a party já está pronta; se o socket ainda estiver
-          // entrando ou offline, o cálculo local mantém a navegação utilizável.
-          route = await party.publishRoute(requestedRoute);
-        } catch (publishError) {
+          // O traçado local não pode depender da sincronização do socket: a
+          // party pode ainda não ter recebido o primeiro GPS do aparelho.
           route = await calculateRoute(next.origin, next.destination);
-          if (!route) throw publishError;
+        } catch (calculateError) {
+          // Mantém compatibilidade quando o endpoint HTTP estiver indisponível.
+          route = await party.publishRoute(requestedRoute);
+          if (!route) throw calculateError;
         }
+        // A publicação é complementar; uma recusa por falta de GPS compartilhado
+        // não pode apagar a rota pessoal já calculada.
+        party.publishRoute(requestedRoute).catch(() => undefined);
         const baseOfflinePackage = createOfflineRoutePackage(route);
         let offlineGraph;
         try { offlineGraph = (await prepareOfflineGraph({ ...route, offlinePackageId: baseOfflinePackage?.id }))?.graph; } catch { offlineGraph = null; }
