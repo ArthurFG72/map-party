@@ -1688,7 +1688,7 @@ export default function PartyScreen({ session, onLeave }) {
       </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
         <View style={styles.navigationCardText}>
-          <Text style={styles.navigationTraveled}>Percorrido: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
+          <Text style={styles.navigationTraveled}>Distância percorrida: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
           <Text style={styles.navigationEyebrow}>{navigationGuidance?.precisionMode ? 'DETALHE DA MANOBRA' : navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
           <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
@@ -2079,7 +2079,7 @@ const styles = StyleSheet.create({
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
   pressed: { opacity: 0.72 },
   personalRouteBadge: { display: 'none' }, navigationEyebrow: { display: 'none' },
-  navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#a9b8ca', fontSize: 10, fontWeight: '800', marginBottom: 2 },
+  navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#fff', fontSize: 12, lineHeight: 15, fontWeight: '900', marginBottom: 3 },
   navigationEta: { color: '#a9b8ca', fontSize: 10, marginTop: 3, paddingRight: '42%' },
   navigationProgressTrack: { position: 'absolute', right: 0, bottom: 0, width: '38%', height: 4, marginTop: 0, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' },
   centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center' }
