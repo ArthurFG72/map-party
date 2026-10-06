@@ -11,9 +11,8 @@ on:
 
 jobs:
   build-ios-unsigned:
-    # Use the stable Intel image; macos-26-intel is a preview-capacity image
-    # and can fail before the first workflow step starts.
-    runs-on: macos-15
+    # This repository's successful iOS builds use the Intel macOS runner.
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
