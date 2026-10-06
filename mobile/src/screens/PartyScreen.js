@@ -230,6 +230,10 @@ export default function PartyScreen({ session, onLeave }) {
   const [directRecipient, setDirectRecipient] = useState(null);
   const [directDraft, setDirectDraft] = useState('');
   const [directSending, setDirectSending] = useState(false);
+  const [navigationMessageMenuOpen, setNavigationMessageMenuOpen] = useState(false);
+  const [navigationMessageSelection, setNavigationMessageSelection] = useState(() => new Set());
+  const [navigationMessageDraft, setNavigationMessageDraft] = useState('');
+  const [navigationMessageSending, setNavigationMessageSending] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState('');
   const [assistantReply, setAssistantReply] = useState('');
   const speechAssistant = useSpeechAssistant({ onFinalTranscript: (text) => submitAssistant(text), connectivityLevel: party.connectivity.level });
@@ -265,6 +269,7 @@ export default function PartyScreen({ session, onLeave }) {
   const lastRecalculationAtRef = useRef(0);
   const lastNavigationCameraRef = useRef(null);
   const lastFreeCameraPositionRef = useRef(null);
+  const lastMapRegionRef = useRef(INITIAL_REGION);
   const completedOriginRef = useRef(null);
   const traveledMetersRef = useRef(0);
   const navigationStartedAtRef = useRef(0);
@@ -708,6 +713,11 @@ export default function PartyScreen({ session, onLeave }) {
       clearTimeout(restoreMapTimerRef.current);
       setMapRefreshKey((current) => current + 1);
       restoreMapTimerRef.current = setTimeout(() => {
+        const savedRegion = lastMapRegionRef.current;
+        if (savedRegion?.latitudeDelta && savedRegion?.longitudeDelta) {
+          mapRef.current?.animateToRegion(savedRegion, 350);
+          return;
+        }
         mapRef.current?.animateCamera({
           center: {
             latitude: maneuver ? (position.lat + maneuver.lat) / 2 : position.lat,
@@ -1439,6 +1449,42 @@ export default function PartyScreen({ session, onLeave }) {
     }
   }
 
+  function toggleNavigationMessageRecipient(participantId) {
+    setNavigationMessageSelection((current) => {
+      const next = new Set(current);
+      if (next.has(participantId)) next.delete(participantId);
+      else next.add(participantId);
+      return next;
+    });
+  }
+
+  function toggleAllNavigationMessageRecipients(participants) {
+    setNavigationMessageSelection((current) => current.size === participants.length
+      ? new Set()
+      : new Set(participants.map((participant) => participant.id)));
+  }
+
+  async function sendNavigationMessage() {
+    const text = navigationMessageDraft.trim();
+    const participants = party.participants.filter((item) => item.id !== ownParticipantId);
+    const targetIds = [...navigationMessageSelection].filter((id) => participants.some((item) => item.id === id));
+    if (!text || !targetIds.length || navigationMessageSending) return;
+    setNavigationMessageSending(true);
+    try {
+      const results = await Promise.allSettled(targetIds.map((id) => party.sendDirectMessage(id, text)));
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      if (failed) setMessage(`Mensagem enviada para ${targetIds.length - failed} participante(s); ${failed} falha(s).`);
+      else setMessage(`Mensagem enviada para ${targetIds.length} participante(s).`);
+      if (!failed) {
+        setNavigationMessageDraft('');
+        setNavigationMessageSelection(new Set());
+        setNavigationMessageMenuOpen(false);
+      }
+    } finally {
+      setNavigationMessageSending(false);
+    }
+  }
+
   function selectSavedPlace(place) {
     Alert.alert(
       `Usar como ${activeKind === 'origin' ? 'origem' : 'destino'}?`,
@@ -1610,7 +1656,7 @@ export default function PartyScreen({ session, onLeave }) {
         key={mapRefreshKey}
         ref={mapRef}
         style={styles.map}
-        initialRegion={INITIAL_REGION}
+        initialRegion={lastMapRegionRef.current}
          provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : undefined}
          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
          minZoomLevel={2}
@@ -1620,7 +1666,10 @@ export default function PartyScreen({ session, onLeave }) {
         showsCompass={false}
         showsUserLocation={false}
         showsPointsOfInterest={false}
-        onRegionChangeComplete={setVisibleRegion}
+        onRegionChangeComplete={(region) => {
+          lastMapRegionRef.current = region;
+          setVisibleRegion(region);
+        }}
         onLongPress={(event) => {
           if (navigationLocked) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
@@ -1752,7 +1801,7 @@ export default function PartyScreen({ session, onLeave }) {
       </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
         <View style={styles.navigationCardText}>
-          <Text style={styles.navigationTraveled}>Distância percorrida: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
+           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={styles.navigationTraveled}>Distância percorrida: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
           <Text style={styles.navigationEyebrow}>{navigationGuidance?.precisionMode ? 'DETALHE DA MANOBRA' : navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
           <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
@@ -1760,18 +1809,39 @@ export default function PartyScreen({ session, onLeave }) {
           <View accessibilityRole="progressbar" accessibilityLabel="Progresso da rota" accessibilityValue={{ min: 0, max: 100, now: progressPercent, text: `${progressPercent}% concluído` }} style={styles.navigationProgressTrack}>
             <View style={[styles.navigationProgressFill, { width: `${progressPercent}%` }]} />
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.navigationPeopleRow}>
-            {party.participants.filter((item) => item.id !== ownParticipantId).map((item) => <Pressable
-              key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Enviar mensagem para ${item.name}`}
-              onPress={() => setDirectRecipient(item)}
-              style={[styles.navigationPersonButton, directRecipient?.id === item.id && styles.navigationPersonButtonActive]}
-            >
-              <Text numberOfLines={1} style={styles.navigationPersonText}>{item.name}</Text>
-            </Pressable>)}
-          </ScrollView>
-          {directRecipient && <View style={styles.navigationDirectRow}>
+           {(() => {
+             const messageParticipants = party.participants.filter((item) => item.id !== ownParticipantId);
+             const allMessageParticipantsSelected = messageParticipants.length > 0 && navigationMessageSelection.size === messageParticipants.length;
+             return <View style={styles.navigationMessageArea}>
+               <Pressable accessibilityRole="button" accessibilityLabel="Enviar mensagem" onPress={() => setNavigationMessageMenuOpen((open) => !open)} style={styles.navigationMessageButton}>
+                 <Text style={styles.navigationMessageButtonText}>Enviar mensagem</Text>
+               </Pressable>
+               {navigationMessageMenuOpen && <View style={styles.navigationMessageMenu}>
+                 <Text style={styles.navigationMessageTitle}>Destinatários</Text>
+                 {!messageParticipants.length && <Text style={styles.navigationMessageEmpty}>Nenhum participante disponível.</Text>}
+                 {!!messageParticipants.length && <Pressable onPress={() => toggleAllNavigationMessageRecipients(messageParticipants)} style={styles.navigationMessageOption}>
+                   <Text style={styles.navigationMessageCheck}>{allMessageParticipantsSelected ? '✓' : '○'}</Text>
+                   <Text numberOfLines={1} style={styles.navigationMessageOptionText}>Todos</Text>
+                 </Pressable>}
+                 <ScrollView style={styles.navigationMessageList} nestedScrollEnabled>
+                   {messageParticipants.map((item) => {
+                     const selected = navigationMessageSelection.has(item.id);
+                     return <Pressable key={item.id} onPress={() => toggleNavigationMessageRecipient(item.id)} style={styles.navigationMessageOption}>
+                       <Text style={styles.navigationMessageCheck}>{selected ? '✓' : '○'}</Text>
+                       <Text numberOfLines={1} style={styles.navigationMessageOptionText}>{item.name}</Text>
+                     </Pressable>;
+                   })}
+                 </ScrollView>
+                 {!!navigationMessageSelection.size && <View style={styles.navigationMessageCompose}>
+                   <TextInput value={navigationMessageDraft} onChangeText={setNavigationMessageDraft} onSubmitEditing={sendNavigationMessage} placeholder="Mensagem" maxLength={500} returnKeyType="send" style={styles.navigationMessageInput} />
+                   <Pressable onPress={sendNavigationMessage} disabled={navigationMessageSending || !navigationMessageDraft.trim()} style={[styles.navigationMessageSend, (navigationMessageSending || !navigationMessageDraft.trim()) && styles.disabled]}>
+                     <Text style={styles.navigationMessageSendText}>{navigationMessageSending ? '...' : 'Enviar'}</Text>
+                   </Pressable>
+                 </View>}
+               </View>}
+             </View>;
+           })()}
+           {!navigationActive && directRecipient && <View style={styles.navigationDirectRow}>
             <Text numberOfLines={1} style={styles.navigationDirectTarget}>{directRecipient.name}</Text>
             <TextInput
               value={directDraft}
@@ -1797,7 +1867,7 @@ export default function PartyScreen({ session, onLeave }) {
               <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
             </Pressable>
           </>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text style={styles.centerNavigationText}>Central{`\n`}izar</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text numberOfLines={1} style={styles.centerNavigationText}>Centralizar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" accessibilityState={{ disabled: navigationLocked }} disabled={navigationLocked} onPress={stopNavigation} style={[styles.stopNavigation, navigationLocked && styles.disabled]}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
         </View>
         <View style={styles.lockedActions}>
@@ -2172,8 +2242,8 @@ const styles = StyleSheet.create({
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
   pressed: { opacity: 0.72 },
   personalRouteBadge: { display: 'none' }, navigationEyebrow: { display: 'none' },
-  navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#fff', fontSize: 12, lineHeight: 15, fontWeight: '900', marginBottom: 3 },
-  navigationPeopleRow: { gap: 5, paddingTop: 5, paddingRight: 4 }, navigationPersonButton: { maxWidth: 120, minHeight: 24, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationPersonButtonActive: { backgroundColor: '#0284c7' }, navigationPersonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '800' }, navigationDirectRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 5 }, navigationDirectTarget: { maxWidth: 70, color: '#bae6fd', fontSize: 9, fontWeight: '800' }, navigationDirectInput: { flex: 1, minHeight: 27, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationDirectButton: { minHeight: 27, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationDirectButtonText: { color: '#fff', fontSize: 9, fontWeight: '900' }, navigationDirectClose: { paddingHorizontal: 2 }, navigationDirectCloseText: { color: '#bae6fd', fontSize: 18 },
+  navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#fff', fontSize: 12, lineHeight: 15, fontWeight: '900', marginBottom: 3, flexShrink: 0 },
+  navigationPeopleRow: { gap: 5, paddingTop: 5, paddingRight: 4 }, navigationPersonButton: { maxWidth: 120, minHeight: 24, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationPersonButtonActive: { backgroundColor: '#0284c7' }, navigationPersonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '800' }, navigationDirectRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 5 }, navigationDirectTarget: { maxWidth: 70, color: '#bae6fd', fontSize: 9, fontWeight: '800' }, navigationDirectInput: { flex: 1, minHeight: 27, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationDirectButton: { minHeight: 27, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationDirectButtonText: { color: '#fff', fontSize: 9, fontWeight: '900' }, navigationDirectClose: { paddingHorizontal: 2 }, navigationDirectCloseText: { color: '#bae6fd', fontSize: 18 }, navigationMessageArea: { position: 'relative', marginTop: 5, zIndex: 60 }, navigationMessageButton: { alignSelf: 'flex-start', minHeight: 24, paddingHorizontal: 8, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationMessageButtonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '900' }, navigationMessageMenu: { position: 'absolute', left: 0, right: 0, bottom: 29, padding: 7, borderRadius: 8, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#475569', zIndex: 70, elevation: 12 }, navigationMessageTitle: { color: '#bae6fd', fontSize: 9, fontWeight: '900', marginBottom: 3 }, navigationMessageEmpty: { color: '#cbd5e1', fontSize: 9, paddingVertical: 4 }, navigationMessageList: { maxHeight: 110 }, navigationMessageOption: { minHeight: 24, flexDirection: 'row', alignItems: 'center', paddingVertical: 2 }, navigationMessageCheck: { width: 20, color: '#7dd3fc', fontSize: 14, fontWeight: '900', textAlign: 'center' }, navigationMessageOptionText: { flex: 1, color: '#f8fafc', fontSize: 10, fontWeight: '700' }, navigationMessageCompose: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 }, navigationMessageInput: { flex: 1, minHeight: 28, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationMessageSend: { minHeight: 28, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationMessageSendText: { color: '#fff', fontSize: 9, fontWeight: '900' },
   navigationEta: { color: '#a9b8ca', fontSize: 10, marginTop: 3, paddingRight: '42%' },
   navigationProgressTrack: { position: 'absolute', right: 0, bottom: 0, width: '38%', height: 4, marginTop: 0, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' },
   centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center' }
