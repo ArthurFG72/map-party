@@ -12,7 +12,7 @@ on:
 jobs:
   build-ios-unsigned:
     # This repository's successful iOS builds use the Intel macOS runner.
-    runs-on: macos-26-intel
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
