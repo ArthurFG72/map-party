@@ -1,5 +1,6 @@
 import { acceptsContractVersion, CONTRACT_VERSION } from '../contracts.js';
-import { cleanPoint, cleanRoute } from '../validation.js';
+import { cleanPoint, cleanRoute, cleanRouteProfile } from '../validation.js';
+import { createWaterwayRouteService } from './waterwayRouteService.js';
 
 const ROUTE_ENDPOINT_TOLERANCE_METERS = 300;
 const ROUTE_ENDPOINT_FALLBACK_TOLERANCE_METERS = 5_000;
@@ -46,13 +47,15 @@ export function createRouteService({
   fetchImpl = fetch,
   timeoutMs = 10_000,
   trafficStore = null,
-  routeLearningStore = null
+  routeLearningStore = null,
+  waterwayService = createWaterwayRouteService()
 } = {}) {
   return {
     async calculate(payload) {
       const requestRoute = cleanRouteRequest(payload);
       if (!requestRoute) throw Object.assign(new Error('Invalid route request'), { code: 'INVALID_ROUTE' });
-      const { origin, destination } = requestRoute;
+      const { origin, destination, profile } = requestRoute;
+      if (profile === 'boat') return createBoatRoute(origin, destination, waterwayService);
       const coordinates = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
       const url = new URL(`/route/v1/driving/${coordinates}`, baseUrl);
       url.searchParams.set('overview', 'full');
@@ -97,6 +100,7 @@ export function createRouteService({
         const legs = compactOsrmLegs(selected?.legs);
         const route = body?.code === 'Ok' && selected && legs ? cleanRoute({
           contractVersion: CONTRACT_VERSION,
+          profile,
           origin,
           destination,
           geometry: selected.geometry,
@@ -141,9 +145,24 @@ export function compactOsrmLegs(rawLegs) {
   }));
 }
 
+async function createBoatRoute(origin, destination, waterwayService) {
+  const waterRoute = await waterwayService.route(origin, destination);
+  return cleanRoute({
+    contractVersion: CONTRACT_VERSION,
+    profile: 'boat',
+    origin,
+    destination,
+    geometry: waterRoute.geometry,
+    distance: waterRoute.distance,
+    duration: waterRoute.duration,
+    legs: waterRoute.legs
+  });
+}
+
 function cleanRouteRequest(payload) {
-  if (!acceptsContractVersion(payload) || payload?.profile !== 'driving') return null;
+  if (!acceptsContractVersion(payload)) return null;
+  const profile = cleanRouteProfile(payload?.profile);
   const origin = cleanPoint(payload.origin);
   const destination = cleanPoint(payload.destination);
-  return origin && destination ? { origin, destination } : null;
+  return profile && origin && destination ? { origin, destination, profile } : null;
 }

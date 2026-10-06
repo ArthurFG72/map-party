@@ -4,6 +4,7 @@ import { createGeocodeService, normalizeQuery, normalizeViewbox } from '../src/s
 import { createRouteService } from '../src/services/routeService.js';
 import { createPoiService, normalizePoiRequest } from '../src/services/poiService.js';
 import { TtlLruCache } from '../src/services/ttlCache.js';
+import { createWaterwayRouteService } from '../src/services/waterwayRouteService.js';
 
 test('cache TTL expira e remove a entrada menos recente ao atingir o limite', () => {
   let now = 100;
@@ -245,4 +246,44 @@ test('servico de rotas rejeita geometria que nao termina nos pontos solicitados'
   await assert.rejects(() => service.calculate({
     profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 1, lng: 1 }
   }), { code: 'PROVIDER_ERROR' });
+});
+
+test('rota nautica usa o perfil barco e nao chama o roteador terrestre', async () => {
+  let providerCalls = 0;
+  const service = createRouteService({
+    waterwayService: { route: async (origin, destination) => ({
+      geometry: { type: 'LineString', coordinates: [[origin.lng, origin.lat], [-46.635, -23.555], [destination.lng, destination.lat]] },
+      distance: 1800, duration: 360,
+      legs: [{ distance: 1800, duration: 360, steps: [{ distance: 1800, duration: 360, mode: 'boat', maneuver: { type: 'depart', location: [origin.lng, origin.lat] } }] }]
+    }) },
+    fetchImpl: async () => {
+      providerCalls += 1;
+      throw new Error('OSRM terrestre nao deve ser usado para barco');
+    }
+  });
+  const route = await service.calculate({
+    profile: 'boat',
+    origin: { lat: -23.55, lng: -46.63 },
+    destination: { lat: -23.56, lng: -46.64 }
+  });
+  assert.equal(route.profile, 'boat');
+  assert.equal(route.geometry.coordinates.length, 3);
+  assert.equal(route.legs[0].steps[0].mode, 'boat');
+  assert.equal(providerCalls, 0);
+});
+
+test('rota nautica usa apenas trechos navegaveis do grafo OSM', async () => {
+  const service = createWaterwayRouteService({
+    timeoutMs: 1000,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ elements: [
+      { type: 'node', id: 1, lat: 0, lon: 0 },
+      { type: 'node', id: 2, lat: 0, lon: 0.001 },
+      { type: 'node', id: 3, lat: 0, lon: 0.002 },
+      { type: 'way', id: 10, nodes: [1, 2, 3], tags: { waterway: 'river' } }
+    ] }) })
+  });
+  const route = await service.route({ lat: 0, lng: 0 }, { lat: 0, lng: 0.002 });
+  assert.equal(route.geometry.coordinates.length, 5);
+  assert.equal(route.legs[0].steps[0].mode, 'boat');
+  await assert.rejects(() => service.route({ lat: 1, lng: 1 }, { lat: 1, lng: 1.002 }), { code: 'WATERWAY_UNAVAILABLE' });
 });

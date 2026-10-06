@@ -35,5 +35,8 @@ export function stabilizePosition(previous, next) {
   }
   const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);
   if (distance > maximumDistance) return null;
-  return next;
+  // O speed nativo pode ficar congelado depois que o aparelho para. Para não
+  // carregar essa leitura antiga para a UI, use o deslocamento observado entre
+  // duas posições aceitas. A posição continua sendo a fonte de verdade.
+  return { ...next, speed: Math.min(MAX_REALISTIC_SPEED, Math.max(0, measuredSpeed)) };
 }

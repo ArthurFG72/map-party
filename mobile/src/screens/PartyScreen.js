@@ -195,10 +195,12 @@ function cameraHeading(position, headingRef) {
 }
 
 function markerRotation(position, navigationActive, headingRef) {
-  const heading = cameraHeading(position, headingRef);
+  cameraHeading(position, headingRef);
   // Durante a navegação a câmera já aponta para o rumo do veículo. Aplicar o
   // mesmo rumo no Marker faria a águia girar duas vezes.
-  return navigationActive ? 0 : heading;
+  // A câmera acompanha o rumo também na tela de pesquisa; manter a águia
+  // sem rotação evita que ela fique de lado quando o mapa gira.
+  return 0;
 }
 
 function isFuelSearch(value) {
@@ -252,9 +254,12 @@ export default function PartyScreen({ session, onLeave }) {
   const navigationActive = navigationState.navigation === NAVIGATION_STATE.NAVIGATING || navigationState.navigation === NAVIGATION_STATE.RECALCULATING;
   const [navigationLocked, setNavigationLocked] = useState(false);
   const [navigationGuidance, setNavigationGuidance] = useState(null);
+  const [temporaryStopArmed, setTemporaryStopArmed] = useState(false);
+  const [routeProfile, setRouteProfile] = useState('driving');
   const [completedRoute, setCompletedRoute] = useState(null);
   const [routeDisplayEnabled, setRouteDisplayEnabled] = useState(true);
   const [traveledMeters, setTraveledMeters] = useState(0);
+  const [plannedTripMeters, setPlannedTripMeters] = useState(0);
   const [mapRefreshKey, setMapRefreshKey] = useState(0);
   const [recalculating, setRecalculating] = useState(false);
   const [sosSending, setSosSending] = useState(false);
@@ -272,6 +277,8 @@ export default function PartyScreen({ session, onLeave }) {
   const lastMapRegionRef = useRef(INITIAL_REGION);
   const completedOriginRef = useRef(null);
   const traveledMetersRef = useRef(0);
+  const plannedTripMetersRef = useRef(0);
+  const lastTraveledPositionRef = useRef(null);
   const navigationStartedAtRef = useRef(0);
   const navigationTraceRef = useRef([]);
   const appStateRef = useRef(AppState.currentState);
@@ -285,6 +292,15 @@ export default function PartyScreen({ session, onLeave }) {
   const assistantHistoryRef = useRef([]);
   const categoryKey = activeCategories.join(',');
   const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
+  const returnOrigin = completedRoute?.origin
+    || completedOriginRef.current
+    || originalNavigationRouteRef.current?.origin;
+  const returnRouteStarted = Boolean(completedRoute || navigationStartedAtRef.current > 0);
+  const canReturnToOrigin = Boolean(returnOrigin && returnRouteStarted && (
+    completedRoute
+      || !location.position
+      || distanceMeters(returnOrigin, location.position) >= 15
+  ));
   // GPS local é necessário para busca por proximidade mesmo quando o usuário
   // optou por não compartilhar sua posição com a party.
   // O GPS local não pode depender do ACK do socket. A posição também é
@@ -519,6 +535,7 @@ export default function PartyScreen({ session, onLeave }) {
   useEffect(() => {
     setLocalRoute(null);
     if (!party.route) return;
+    setRouteProfile(party.route.profile || 'driving');
     setPoints({ origin: party.route.origin, destination: party.route.destination });
     routeOriginRef.current = party.route.origin || null;
     const coordinates = party.route.geometry.coordinates.map(([longitude, latitude]) => ({ latitude, longitude }));
@@ -592,22 +609,26 @@ export default function PartyScreen({ session, onLeave }) {
       return;
     }
     lastNavigationCameraRef.current = null;
+    const heading = cameraHeading(location.position, headingRef);
     const previous = lastFreeCameraPositionRef.current;
-    const movedEnough = !previous || distanceMeters(previous, location.position) >= 10;
-    if (!movedEnough) return;
-    lastFreeCameraPositionRef.current = { lat: location.position.lat, lng: location.position.lng };
+    const movedEnough = !previous || distanceMeters(previous, location.position) >= 3;
+    const headingChanged = heading != null && (
+      previous?.heading == null || Math.abs(((heading - previous.heading + 540) % 360) - 180) >= 5
+    );
+    if (!movedEnough && !headingChanged) return;
+    lastFreeCameraPositionRef.current = { lat: location.position.lat, lng: location.position.lng, heading };
     if (!didCenterUserRef.current) {
       didCenterUserRef.current = true;
-      mapRef.current?.animateToRegion({
-        latitude: location.position.lat,
-        longitude: location.position.lng,
-        latitudeDelta: 0.04,
-        longitudeDelta: 0.04
-      }, 650);
+      mapRef.current?.animateCamera({
+        center: { latitude: location.position.lat, longitude: location.position.lng },
+        zoom: 16.5,
+        heading
+      }, { duration: 650 });
       return;
     }
     mapRef.current?.animateCamera({
-      center: { latitude: location.position.lat, longitude: location.position.lng }
+      center: { latitude: location.position.lat, longitude: location.position.lng },
+      heading
     }, { duration: 350 });
   }, [location.position, party.route, navigationActive, navigationGuidance?.precisionMode, navigationGuidance?.maneuverPoint?.lat, navigationGuidance?.maneuverPoint?.lng]);
 
@@ -617,16 +638,24 @@ export default function PartyScreen({ session, onLeave }) {
     if (!lastTracePoint || location.position.timestamp > lastTracePoint.timestamp) {
       navigationTraceRef.current = [...navigationTraceRef.current.slice(-499), location.position];
     }
+    // Distância percorrida é uma medição do deslocamento real do aparelho.
+    // Ela não depende da geometria, progresso ou recálculo da rota atual.
+    const previousTraveledPosition = lastTraveledPositionRef.current;
+    if (!previousTraveledPosition || location.position.timestamp > previousTraveledPosition.timestamp) {
+      if (previousTraveledPosition) {
+        const segmentMeters = distanceMeters(previousTraveledPosition, location.position);
+        const elapsedSeconds = Math.max(0.1, (location.position.timestamp - previousTraveledPosition.timestamp) / 1000);
+        // Ignore impossible GPS jumps; they must never inflate the trip total.
+        if (Number.isFinite(segmentMeters) && segmentMeters >= 1 && segmentMeters / elapsedSeconds <= 100) {
+          const nextTraveledMeters = traveledMetersRef.current + segmentMeters;
+          traveledMetersRef.current = nextTraveledMeters;
+          setTraveledMeters(nextTraveledMeters);
+        }
+      }
+      lastTraveledPositionRef.current = location.position;
+    }
     const nextGuidance = buildNavigationGuidance(navigationRoute, location.position);
     if (!nextGuidance) return;
-    const routeDistance = Number(navigationRoute.distance);
-    if (Number.isFinite(routeDistance) && routeDistance > 0) {
-      const measuredProgress = Math.max(0, Math.min(routeDistance, routeDistance * (nextGuidance.progress || 0)));
-      if (measuredProgress >= traveledMetersRef.current) {
-        traveledMetersRef.current = measuredProgress;
-        setTraveledMeters(measuredProgress);
-      }
-    }
     offRouteReadingsRef.current = nextGuidance.offRoute ? offRouteReadingsRef.current + 1 : 0;
     setNavigationGuidance({
       ...nextGuidance,
@@ -670,8 +699,7 @@ export default function PartyScreen({ session, onLeave }) {
       voiceHistoryRef.current = {};
       setNavigationLocked(false);
       setNavigationGuidance(null);
-      traveledMetersRef.current = 0;
-      setTraveledMeters(0);
+      lastTraveledPositionRef.current = null;
       setRouteDisplayEnabled(false);
       setLocalRoute(null);
       // Keep the completed route available so the next action can return to
@@ -737,6 +765,23 @@ export default function PartyScreen({ session, onLeave }) {
 
 
   async function setPoint(kind, point, { confirmed = false } = {}) {
+    if (routeProfile === 'boat' && point?.source === 'geolocation') {
+      const currentOrigin = { lat: point.lat, lng: point.lng, label: 'Minha localização atual', source: 'geolocation' };
+      setPoints((current) => ({ ...current, origin: currentOrigin }));
+      routeOriginRef.current = currentOrigin;
+      setActiveKind('destination');
+      savePartyPoints(session.roomId, { ...points, origin: currentOrigin });
+      setMessage('Origem náutica atualizada para sua posição GPS.');
+      return true;
+    }
+    if (routeProfile === 'boat' && kind === 'origin') {
+      setMessage('No modo barco, a origem é sempre sua posição GPS atual.');
+      return false;
+    }
+    if (navigationActive && navigationLocked && !confirmed) {
+      setMessage('Desbloqueie o cadeado para adicionar um desvio à rota.');
+      return false;
+    }
     if (navigationActive && !confirmed && kind === 'destination' && navigationRoute?.destination) {
       return addTemporaryStop(point);
     }
@@ -821,7 +866,7 @@ export default function PartyScreen({ session, onLeave }) {
       setMessage(kind === 'destination' ? 'Destino definido. Calculando rota…' : 'Calculando rota…');
       try {
         const requestedRoute = {
-          profile: 'driving',
+          profile: routeProfile,
           origin: next.origin,
           destination: next.destination
         };
@@ -829,7 +874,7 @@ export default function PartyScreen({ session, onLeave }) {
         try {
           // O traçado local não pode depender da sincronização do socket: a
           // party pode ainda não ter recebido o primeiro GPS do aparelho.
-          route = await calculateRoute(next.origin, next.destination);
+          route = await calculateRoute(next.origin, next.destination, routeProfile);
         } catch (calculateError) {
           // Mantém compatibilidade quando o endpoint HTTP estiver indisponível.
           route = await party.publishRoute(requestedRoute);
@@ -1041,6 +1086,37 @@ export default function PartyScreen({ session, onLeave }) {
     }
     if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a permissão de localização e tente novamente.');
     await setPoint(activeKind, { lat: currentPosition.lat, lng: currentPosition.lng, label: 'Minha localização', source: 'geolocation' });
+    mapRef.current?.animateCamera({
+      center: { latitude: currentPosition.lat, longitude: currentPosition.lng },
+      zoom: 17,
+      heading: cameraHeading(currentPosition, headingRef)
+    }, { duration: 500 });
+  }
+
+  function selectRouteProfile(profile) {
+    const nextProfile = profile === 'boat' ? 'boat' : 'driving';
+    if (nextProfile === routeProfile) return;
+    setRouteProfile(nextProfile);
+    setLocalRoute(null);
+    party.clearPersonalRoute();
+    setRouteDisplayEnabled(false);
+    if (nextProfile === 'boat') {
+      setActiveKind('destination');
+      if (location.position) {
+        const currentOrigin = {
+          lat: location.position.lat,
+          lng: location.position.lng,
+          label: 'Minha localização atual',
+          source: 'geolocation'
+        };
+        setPoints((current) => ({ ...current, origin: currentOrigin }));
+        routeOriginRef.current = currentOrigin;
+        savePartyPoints(session.roomId, { ...points, origin: currentOrigin });
+      }
+    }
+    setMessage(nextProfile === 'boat'
+      ? 'Modo barco selecionado. A origem será sua posição atual; marque apenas o destino.'
+      : 'Modo veículo selecionado. As rotas usarão as vias terrestres.');
   }
 
   async function centerOnMyLocation() {
@@ -1102,11 +1178,12 @@ export default function PartyScreen({ session, onLeave }) {
       savePartyPoints(session.roomId, nextPoints);
     }
     let routeToStart = routeOverride || navigationRoute;
+    if (!routeOverride && routeToStart && (routeToStart.profile || 'driving') !== routeProfile) routeToStart = null;
     if (!routeToStart && currentDestination) {
       setLoading(true);
       setMessage('Calculando rota para iniciar a navegação…');
       try {
-        routeToStart = await calculateRoute(currentOrigin, currentDestination);
+        routeToStart = await calculateRoute(currentOrigin, currentDestination, routeProfile);
         if (!routeToStart) throw new Error('O serviço não retornou uma rota válida.');
         setLocalRoute(routeToStart);
         savePartyPoints(session.roomId, { origin: currentOrigin, destination: currentDestination });
@@ -1124,8 +1201,12 @@ export default function PartyScreen({ session, onLeave }) {
     setRouteDisplayEnabled(true);
     traveledMetersRef.current = 0;
     setTraveledMeters(0);
+    plannedTripMetersRef.current = Number.isFinite(routeToStart.distance) ? routeToStart.distance : 0;
+    setPlannedTripMeters(plannedTripMetersRef.current);
     navigationStartedAtRef.current = Date.now();
     navigationTraceRef.current = [currentPosition];
+    lastTraveledPositionRef.current = currentPosition;
+    setTemporaryStopArmed(false);
     setNavigationLocked(false);
     setNavigationGuidance(buildNavigationGuidance(routeToStart, currentPosition));
     transitionNavigationState({ type: 'navigation.start' });
@@ -1145,9 +1226,14 @@ export default function PartyScreen({ session, onLeave }) {
     setLoading(true);
     setMessage(`Calculando parada em ${stop.name || stop.label || 'novo local'}â€¦`);
     try {
-      const stopRoute = await calculateRoute(location.position, stop);
+      const stopRoute = await calculateRoute(location.position, stop, navigationRoute?.profile || routeProfile);
       party.clearPersonalRoute();
       setTemporaryStop(stop);
+      const detourTotal = traveledMetersRef.current + (Number.isFinite(stopRoute?.distance) ? stopRoute.distance : 0);
+      if (detourTotal > plannedTripMetersRef.current) {
+        plannedTripMetersRef.current = detourTotal;
+        setPlannedTripMeters(detourTotal);
+      }
       setLocalRoute(stopRoute);
       setPoints({ origin: location.position, destination: stop });
       savePartyPoints(session.roomId, { origin: location.position, destination: stop });
@@ -1172,13 +1258,22 @@ export default function PartyScreen({ session, onLeave }) {
     setLoading(true);
     setMessage('Retomando a rota originalâ€¦');
     try {
-      const route = await calculateRoute(location.position, original.destination);
+      const route = await calculateRoute(location.position, original.destination, original.profile || routeProfile);
       party.clearPersonalRoute();
       setTemporaryStop(null);
       setLocalRoute(route);
       setRouteDisplayEnabled(true);
       setPoints({ origin: location.position, destination: original.destination });
       setNavigationGuidance(buildNavigationGuidance(route, location.position));
+      const resumedTotal = traveledMetersRef.current + (Number.isFinite(route?.distance) ? route.distance : 0);
+      if (resumedTotal > plannedTripMetersRef.current) {
+        plannedTripMetersRef.current = resumedTotal;
+        setPlannedTripMeters(resumedTotal);
+      }
+      navigationStartedAtRef.current = Date.now();
+      navigationTraceRef.current = [location.position];
+      lastTraveledPositionRef.current = location.position;
+      setTemporaryStopArmed(false);
       transitionNavigationState({ type: 'navigation.start' });
       setMessage('Rota original retomada.');
     } catch (error) {
@@ -1198,7 +1293,7 @@ export default function PartyScreen({ session, onLeave }) {
     setLoading(true);
     setMessage('Calculando a rota de volta…');
     try {
-      const route = { ...(await calculateRoute(origin, destination)), origin, destination };
+      const route = { ...(await calculateRoute(origin, destination, previous?.profile || routeProfile)), origin, destination };
       setLocalRoute(route);
       setPoints({ origin, destination });
       savePartyPoints(session.roomId, { origin, destination });
@@ -1210,8 +1305,12 @@ export default function PartyScreen({ session, onLeave }) {
       setRouteDisplayEnabled(true);
       traveledMetersRef.current = 0;
       setTraveledMeters(0);
+      plannedTripMetersRef.current = Number.isFinite(route.distance) ? route.distance : 0;
+      setPlannedTripMeters(plannedTripMetersRef.current);
       navigationStartedAtRef.current = Date.now();
       navigationTraceRef.current = [current];
+      lastTraveledPositionRef.current = current;
+      setTemporaryStopArmed(false);
       transitionNavigationState({ type: 'navigation.start' });
       setMessage('Rota de volta iniciada.');
     } catch (error) {
@@ -1227,6 +1326,7 @@ export default function PartyScreen({ session, onLeave }) {
     transitionNavigationState({ type: 'navigation.cancel' });
     setNavigationLocked(false);
     setNavigationGuidance(null);
+    setTemporaryStopArmed(false);
     setQuery('');
     setResults([]);
     setActiveKind('destination');
@@ -1264,7 +1364,7 @@ export default function PartyScreen({ session, onLeave }) {
                 if (!reply.ready) return setMessage('Consentimento registrado; aguardando os demais participantes.');
                 if (!points.origin || !points.destination) return setMessage('Compartilhamento autorizado. Defina uma rota para compartilhá-la.');
                 const sharedRoute = await party.publishRoute({
-                  profile: 'driving',
+                  profile: routeProfile,
                   origin: points.origin,
                   destination: points.destination
                 }, 'shared');
@@ -1350,7 +1450,7 @@ export default function PartyScreen({ session, onLeave }) {
     setMessage(automatic ? 'Você saiu da rota. Recalculando automaticamente…' : 'Recalculando rota…');
     try {
       const calculatedRoute = await party.publishRoute({
-        profile: 'driving',
+        profile: navigationRoute?.profile || routeProfile,
         origin,
         destination,
         routeOrigin: fixedOrigin
@@ -1691,7 +1791,13 @@ export default function PartyScreen({ session, onLeave }) {
           mapTapRef.current = null;
           setSelectedPoi(null);
           setShowSavedPlaces(false);
-          setPoint(activeKind, { lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
+          const pointKind = navigationActive || routeProfile === 'boat' ? 'destination' : activeKind;
+          if (navigationActive && !temporaryStopArmed) {
+            setMessage('Toque em “Adicionar desvio” com o cadeado aberto antes de marcar o ponto.');
+            return;
+          }
+          setPoint(pointKind, { lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
+          if (navigationActive) setTemporaryStopArmed(false);
         }}
       >
         {Platform.OS === 'android' && <>
@@ -1801,7 +1907,7 @@ export default function PartyScreen({ session, onLeave }) {
       </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
         <View style={styles.navigationCardText}>
-           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={styles.navigationTraveled}>Distância percorrida: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'}</Text>
+           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={styles.navigationTraveled}>Distância percorrida: {Number.isFinite(traveledMeters) ? formatDistance(traveledMeters) : '--'} / {Number.isFinite(plannedTripMeters) && plannedTripMeters > 0 ? formatDistance(plannedTripMeters) : '--'}</Text>
           {!!party.personalRoute && <Text accessibilityLabel="Navegação usando rota pessoal" style={styles.personalRouteBadge}>ROTA PESSOAL</Text>}
           <Text style={styles.navigationEyebrow}>{navigationGuidance?.precisionMode ? 'DETALHE DA MANOBRA' : navigationGuidance?.hasSteps && Number.isFinite(navigationGuidance.instructionDistance) ? `${navigationGuidance.instructionDistance < 12 ? 'AGORA' : `EM ${formatDistance(navigationGuidance.instructionDistance).toUpperCase()}`}` : 'NAVEGANDO'}</Text>
           <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.navigationInstruction}>{navigationGuidance?.instruction || 'Calculando próxima orientação…'}</Text>
@@ -1867,7 +1973,10 @@ export default function PartyScreen({ session, onLeave }) {
               <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
             </Pressable>
           </>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text numberOfLines={1} style={styles.centerNavigationText}>Centralizar</Text></Pressable>
+          {!navigationLocked && <Pressable accessibilityRole="button" accessibilityLabel="Adicionar desvio temporário à rota" onPress={() => { setTemporaryStopArmed(true); setMessage('Desvio ativado. Dê dois toques no mapa para marcar a parada.'); }} style={styles.detourButton}>
+            <Text style={styles.detourButtonText}>{temporaryStopArmed ? 'Marque no mapa' : 'Adicionar desvio'}</Text>
+          </Pressable>}
+          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text numberOfLines={2} style={styles.centerNavigationText}>Centra{`\n`}lizar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" accessibilityState={{ disabled: navigationLocked }} disabled={navigationLocked} onPress={stopNavigation} style={[styles.stopNavigation, navigationLocked && styles.disabled]}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
         </View>
         <View style={styles.lockedActions}>
@@ -2003,6 +2112,16 @@ export default function PartyScreen({ session, onLeave }) {
           })}
         </ScrollView>}
         {utilityMenuOpen && <View style={styles.utilityMenu}>
+          <Text style={styles.routeProfileTitle}>Tipo de deslocamento</Text>
+          <View style={styles.routeProfileRow}>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: routeProfile === 'driving' }} onPress={() => selectRouteProfile('driving')} style={[styles.routeProfileButton, routeProfile === 'driving' && styles.routeProfileButtonActive]}>
+              <Text style={[styles.routeProfileText, routeProfile === 'driving' && styles.routeProfileTextActive]}>Veículo</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: routeProfile === 'boat' }} onPress={() => selectRouteProfile('boat')} style={[styles.routeProfileButton, routeProfile === 'boat' && styles.routeProfileButtonActive]}>
+              <Text style={[styles.routeProfileText, routeProfile === 'boat' && styles.routeProfileTextActive]}>Barco</Text>
+            </Pressable>
+          </View>
+          {routeProfile === 'boat' && <Text style={styles.routeProfileHint}>A origem é o GPS atual. Use dois toques no mapa para marcar apenas o destino.</Text>}
         {!navigationActive && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
           {POI_CATEGORIES.map((category) => {
             const active = activeCategories.includes(category.id);
@@ -2076,7 +2195,8 @@ export default function PartyScreen({ session, onLeave }) {
         <Text style={styles.message}>Toque no nome de um participante para autorizar ou bloquear a rota dele neste aparelho.</Text>
 
         {!navigationActive && <View style={styles.segment}>
-          <Pressable onPress={() => setActiveKind('origin')} style={[styles.segmentButton, activeKind === 'origin' && styles.originActive]}><Text style={[styles.segmentText, activeKind === 'origin' && styles.activeText]}>Origem</Text></Pressable>
+          {routeProfile !== 'boat' && <Pressable onPress={() => setActiveKind('origin')} style={[styles.segmentButton, activeKind === 'origin' && styles.originActive]}><Text style={[styles.segmentText, activeKind === 'origin' && styles.activeText]}>Origem</Text></Pressable>}
+          {routeProfile === 'boat' && <View style={styles.boatOriginBadge}><Text style={styles.boatOriginText}>Origem: GPS atual</Text></View>}
           <Pressable onPress={() => setActiveKind('destination')} style={[styles.segmentButton, activeKind === 'destination' && styles.destinationActive]}><Text style={[styles.segmentText, activeKind === 'destination' && styles.activeText]}>Destino</Text></Pressable>
            <Pressable onPress={useMyLocation} style={styles.locationButton}><Text style={styles.locationText}>Meu local</Text></Pressable>
            <Pressable accessibilityRole="button" accessibilityLabel={utilityMenuOpen ? 'Fechar opções adicionais' : 'Abrir opções adicionais'} accessibilityState={{ expanded: utilityMenuOpen }} onPress={() => setUtilityMenuOpen((open) => !open)} style={[styles.utilityMenuButton, utilityMenuOpen && styles.utilityMenuButtonActive]}><Text style={styles.utilityMenuButtonText}>{utilityMenuOpen ? '−' : '+'}</Text></Pressable>
@@ -2084,7 +2204,17 @@ export default function PartyScreen({ session, onLeave }) {
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}{trafficSummary}</Text>}
         <View style={styles.actionRow}>
-          {!navigationActive && completedRoute?.origin && <Pressable
+          {!navigationActive && temporaryStop && originalNavigationRouteRef.current?.destination && <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retomar destino original após a parada"
+            accessibilityState={{ disabled: loading, busy: loading }}
+            disabled={loading}
+            onPress={resumeOriginalNavigation}
+            style={[styles.startNavigation, loading && styles.disabled]}
+          >
+            <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : 'Retomar destino original'}</Text>
+          </Pressable>}
+          {!navigationActive && canReturnToOrigin && <Pressable
             accessibilityRole="button"
             accessibilityLabel="Iniciar rota de volta ao ponto inicial"
             accessibilityState={{ disabled: loading, busy: loading }}
@@ -2183,8 +2313,8 @@ const styles = StyleSheet.create({
   navigationCard: { position: 'absolute', bottom: 16, left: 12, right: 12, minHeight: 104, padding: 12, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: '#b9f227', backgroundColor: '#0b172a', flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#0f172a', shadowOpacity: 0.28, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 7, zIndex: 5 }, lockedActions: { alignItems: 'center', gap: 7 }, lockButton: { width: 44, height: 40, borderRadius: 11, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }, lockIcon: { width: 20, height: 20, alignItems: 'center', justifyContent: 'flex-end' }, lockIconClosed: { transform: [{ scale: 1.05 }] }, lockBody: { width: 16, height: 12, borderRadius: 3, backgroundColor: '#b9f227' }, lockShackle: { position: 'absolute', top: 4, width: 11, height: 12, borderWidth: 3, borderBottomWidth: 0, borderColor: '#b9f227', borderTopLeftRadius: 7, borderTopRightRadius: 7, transform: [{ rotate: '180deg' }] }, lockShackleClosed: { top: 1, transform: [] },
   navigationCardOffRoute: { borderLeftColor: '#fb7185' }, navigationCardText: { flex: 1 }, personalRouteBadge: { alignSelf: 'flex-start', marginBottom: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, overflow: 'hidden', backgroundColor: '#dbeafe', color: '#1d4ed8', fontSize: 9, fontWeight: '900', letterSpacing: 0.8 }, navigationEyebrow: { color: '#b9f227', fontSize: 10, fontWeight: '900', letterSpacing: 1 }, navigationInstruction: { color: '#fff', fontSize: 17, lineHeight: 21, fontWeight: '900', marginTop: 2 }, navigationEta: { color: '#a9b8ca', fontSize: 11, marginTop: 4 },
   navigationProgressTrack: { height: 4, marginTop: 8, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' }, navigationProgressFill: { height: 4, borderRadius: 2, backgroundColor: '#b9f227' },
-  navigationActions: { width: 82, alignItems: 'stretch', gap: 5 }, offRouteText: { color: '#fecdd3', fontSize: 9, lineHeight: 12, fontWeight: '800', textAlign: 'center' }, recalculateButton: { minHeight: 40, paddingHorizontal: 6, borderRadius: 9, backgroundColor: '#e11d48', alignItems: 'center', justifyContent: 'center' }, recalculateButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' },
-  stopNavigation: { minHeight: 33, paddingHorizontal: 6, borderRadius: 9, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 10, fontWeight: '900' }, centerNavigation: { width: 62, minHeight: 36, paddingHorizontal: 0, borderRadius: 9, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center', includeFontPadding: false },
+  navigationActions: { width: 82, alignItems: 'stretch', gap: 5 }, offRouteText: { color: '#fecdd3', fontSize: 9, lineHeight: 12, fontWeight: '800', textAlign: 'center' }, recalculateButton: { minHeight: 40, paddingHorizontal: 6, borderRadius: 9, backgroundColor: '#e11d48', alignItems: 'center', justifyContent: 'center' }, recalculateButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, detourButton: { minHeight: 34, paddingHorizontal: 5, borderRadius: 9, backgroundColor: '#0ea5e9', alignItems: 'center', justifyContent: 'center' }, detourButtonText: { color: '#fff', fontSize: 9, fontWeight: '900', textAlign: 'center' },
+  stopNavigation: { minHeight: 33, paddingHorizontal: 6, borderRadius: 9, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }, stopNavigationText: { color: '#0f172a', fontSize: 10, fontWeight: '900' }, centerNavigation: { width: 62, minHeight: 36, paddingHorizontal: 0, borderRadius: 9, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, centerNavigationText: { color: '#1d4ed8', fontSize: 11, lineHeight: 12, fontWeight: '900', textAlign: 'center', includeFontPadding: false },
   floatingSearch: { minHeight: 50, paddingHorizontal: 13, borderRadius: 25, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', shadowColor: '#0f172a', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   assistantRow: { minHeight: 43, marginTop: 7, paddingHorizontal: 10, borderRadius: 22, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', flexDirection: 'row', alignItems: 'center' }, assistantIcon: { color: '#2563eb', fontSize: 16, marginRight: 6 }, assistantInput: { flex: 1, height: 40, color: '#0f172a', fontSize: 11 }, assistantMicButton: { width: 32, height: 32, marginLeft: 4, borderRadius: 16, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, assistantMicButtonActive: { backgroundColor: '#fecaca' }, assistantMicText: { color: '#1d4ed8', fontSize: 14 }, assistantButton: { minHeight: 31, paddingHorizontal: 9, borderRadius: 15, backgroundColor: '#2563eb', alignItems: 'center', justifyContent: 'center' }, assistantButtonText: { color: '#fff', fontSize: 10, fontWeight: '900' }, assistantReply: { marginTop: 5, paddingHorizontal: 10, color: '#1e3a8a', fontSize: 10, fontWeight: '700' },
   searchIcon: { color: '#475569', fontSize: 24, marginRight: 8 }, floatingInput: { flex: 1, height: 48, color: '#0f172a', fontSize: 15 },
@@ -2234,9 +2364,9 @@ const styles = StyleSheet.create({
   permissionWarning: { minHeight: 46, marginBottom: 8, paddingLeft: 10, paddingRight: 4, borderRadius: 12, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', flexDirection: 'row', alignItems: 'center', gap: 8 }, permissionWarningText: { flex: 1, color: '#9a3412', fontSize: 10, fontWeight: '800' }, permissionWarningButton: { minHeight: 36, paddingHorizontal: 11, borderRadius: 9, backgroundColor: '#ea580c', alignItems: 'center', justifyContent: 'center' }, permissionWarningButtonText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   sharingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#16a34a' }, sharingDotPaused: { backgroundColor: '#f59e0b' }, sharingText: { flex: 1, color: '#475569', fontSize: 10, fontWeight: '700' },
   sharingButton: { minWidth: 72, minHeight: 40, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }, sharingButtonResume: { backgroundColor: '#dcfce7' }, sharingButtonText: { color: '#b91c1c', fontSize: 11, fontWeight: '900' }, sharingButtonTextResume: { color: '#166534' },
-  segment: { flexDirection: 'row', gap: 7, marginBottom: 9 }, segmentButton: { flex: 1, minHeight: 40, borderRadius: 10, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
+  segment: { flexDirection: 'row', gap: 7, marginBottom: 9 }, segmentButton: { flex: 1, minHeight: 40, borderRadius: 10, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' }, boatOriginBadge: { flex: 1, minHeight: 40, paddingHorizontal: 8, borderRadius: 10, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center' }, boatOriginText: { color: '#166534', fontSize: 10, fontWeight: '900', textAlign: 'center' },
   originActive: { backgroundColor: '#16a34a' }, destinationActive: { backgroundColor: '#dc2626' }, segmentText: { color: '#334155', fontSize: 13, fontWeight: '700' }, activeText: { color: '#fff' },
-  locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' }, utilityMenuButton: { width: 40, minHeight: 40, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }, utilityMenuButtonActive: { backgroundColor: '#dbeafe' }, utilityMenuButtonText: { color: '#1e40af', fontSize: 25, lineHeight: 28, fontWeight: '700' }, utilityMenu: { marginBottom: 8, padding: 8, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  locationButton: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, locationText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' }, utilityMenuButton: { width: 40, minHeight: 40, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }, utilityMenuButtonActive: { backgroundColor: '#dbeafe' }, utilityMenuButtonText: { color: '#1e40af', fontSize: 25, lineHeight: 28, fontWeight: '700' }, utilityMenu: { marginBottom: 8, padding: 8, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' }, routeProfileTitle: { color: '#334155', fontSize: 10, fontWeight: '900', marginBottom: 5 }, routeProfileRow: { flexDirection: 'row', gap: 6, marginBottom: 5 }, routeProfileButton: { minHeight: 32, flex: 1, borderRadius: 8, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }, routeProfileButtonActive: { backgroundColor: '#1d4ed8' }, routeProfileText: { color: '#334155', fontSize: 11, fontWeight: '900' }, routeProfileTextActive: { color: '#fff' }, routeProfileHint: { color: '#64748b', fontSize: 9, lineHeight: 12, marginBottom: 5 },
   result: { padding: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1' }, resultText: { color: '#334155', fontSize: 12, lineHeight: 17 }, disabled: { opacity: 0.45 },
   routeSummary: { marginTop: 7, color: '#1e40af', fontSize: 11, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 }, startNavigation: { flex: 1, minHeight: 38, borderRadius: 10, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, startNavigationText: { color: '#fff', fontSize: 12, fontWeight: '900' }, sosButton: { width: 52, minWidth: 52, minHeight: 36, borderRadius: 9, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' }, sosButtonSolo: { width: 60 }, sosButtonText: { color: '#fff', fontSize: 12, fontWeight: '900' }, message: { marginTop: 6, color: '#64748b', fontSize: 10 }, warning: { color: '#b45309' },
   attribution: { marginTop: 5, color: '#64748b', fontSize: 9, textDecorationLine: 'underline' },
@@ -2246,5 +2376,5 @@ const styles = StyleSheet.create({
   navigationPeopleRow: { gap: 5, paddingTop: 5, paddingRight: 4 }, navigationPersonButton: { maxWidth: 120, minHeight: 24, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationPersonButtonActive: { backgroundColor: '#0284c7' }, navigationPersonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '800' }, navigationDirectRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 5 }, navigationDirectTarget: { maxWidth: 70, color: '#bae6fd', fontSize: 9, fontWeight: '800' }, navigationDirectInput: { flex: 1, minHeight: 27, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationDirectButton: { minHeight: 27, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationDirectButtonText: { color: '#fff', fontSize: 9, fontWeight: '900' }, navigationDirectClose: { paddingHorizontal: 2 }, navigationDirectCloseText: { color: '#bae6fd', fontSize: 18 }, navigationMessageArea: { position: 'relative', marginTop: 5, zIndex: 60 }, navigationMessageButton: { alignSelf: 'flex-start', minHeight: 24, paddingHorizontal: 8, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationMessageButtonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '900' }, navigationMessageMenu: { position: 'absolute', left: 0, right: 0, bottom: 29, padding: 7, borderRadius: 8, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#475569', zIndex: 70, elevation: 12 }, navigationMessageTitle: { color: '#bae6fd', fontSize: 9, fontWeight: '900', marginBottom: 3 }, navigationMessageEmpty: { color: '#cbd5e1', fontSize: 9, paddingVertical: 4 }, navigationMessageList: { maxHeight: 110 }, navigationMessageOption: { minHeight: 24, flexDirection: 'row', alignItems: 'center', paddingVertical: 2 }, navigationMessageCheck: { width: 20, color: '#7dd3fc', fontSize: 14, fontWeight: '900', textAlign: 'center' }, navigationMessageOptionText: { flex: 1, color: '#f8fafc', fontSize: 10, fontWeight: '700' }, navigationMessageCompose: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 }, navigationMessageInput: { flex: 1, minHeight: 28, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationMessageSend: { minHeight: 28, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationMessageSendText: { color: '#fff', fontSize: 9, fontWeight: '900' },
   navigationEta: { color: '#a9b8ca', fontSize: 10, marginTop: 3, paddingRight: '42%' },
   navigationProgressTrack: { position: 'absolute', right: 0, bottom: 0, width: '38%', height: 4, marginTop: 0, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' },
-  centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center' }
+  centerNavigationText: { color: '#1d4ed8', fontSize: 11, lineHeight: 12, fontWeight: '900', textAlign: 'center', includeFontPadding: false }
 });

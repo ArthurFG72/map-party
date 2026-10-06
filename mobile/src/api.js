@@ -118,11 +118,11 @@ export function searchNearbyPois(location, categories = ['fuel'], radiusMeters =
   return requestJson(`/api/pois?${params}`);
 }
 
-export function calculateRoute(origin, destination) {
+export function calculateRoute(origin, destination, profile = 'driving') {
   return requestJson('/api/route', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, profile: 'driving' })
+    body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, profile })
   });
 }
 

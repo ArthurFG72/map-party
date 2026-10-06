@@ -64,3 +64,12 @@ test('descarta pequeno movimento fantasma que contradiz duas leituras paradas', 
   );
   assert.equal(stable, null);
 });
+
+test('não reaproveita velocidade antiga quando o deslocamento medido é menor', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 20 },
+    { lat: -23.55018, lng: -46.63, accuracy: 5, timestamp: 11_000, speed: 20 }
+  );
+  assert.notEqual(stable, null);
+  assert.ok(stable.speed < 3, `speed calculado: ${stable.speed}`);
+});

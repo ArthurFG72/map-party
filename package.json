@@ -15,10 +15,12 @@
     "mobile": "npm run start -w mobile",
     "mobile:check": "npm run check -w mobile",
     "build": "npm run build -w client",
-    "test": "npm run test -w server"
+    "test": "npm run test -w server",
+    "postinstall": "patch-package"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "patch-package": "^8.0.1"
   },
   "engines": {
     "node": ">=22.13"
