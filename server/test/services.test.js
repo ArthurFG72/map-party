@@ -133,6 +133,55 @@ test('serviço de rotas rejeita resposta OSRM sem steps válidos', async () => {
   }), { code: 'PROVIDER_ERROR' });
 });
 
+test('servico de rotas rejeita uma saida marcada pelo OSRM como proibida', async () => {
+  const service = createRouteService({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        code: 'Ok',
+        routes: [{
+          geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+          distance: 100,
+          duration: 10,
+          legs: [{
+            distance: 100,
+            duration: 10,
+            steps: [{
+              distance: 100,
+              duration: 10,
+              intersections: [{ entry: [true, false], out: 1 }],
+              maneuver: { type: 'turn', location: [0, 0] }
+            }]
+          }]
+        }]
+      })
+    })
+  });
+  await assert.rejects(() => service.calculate({
+    profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 1, lng: 1 }
+  }), { code: 'PROVIDER_ERROR' });
+});
+
+test('serviço de rotas usa histórico resumido para escolher a melhor alternativa', async () => {
+  const service = createRouteService({
+    routeLearningStore: {
+      evaluate: (route) => ({ duration: route.geometry.coordinates[1][0] === 0.5 ? 20 : 400, samples: 3 })
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        code: 'Ok',
+        routes: [
+          { geometry: { type: 'LineString', coordinates: [[0, 0], [0.1, 0.1], [1, 1]] }, distance: 100, duration: 100, legs: [{ distance: 100, duration: 100, steps: [{ distance: 100, duration: 100, maneuver: { type: 'depart', location: [0, 0] } }] }] },
+          { geometry: { type: 'LineString', coordinates: [[0, 0], [0.5, 0.5], [1, 1]] }, distance: 120, duration: 120, legs: [{ distance: 120, duration: 120, steps: [{ distance: 120, duration: 120, maneuver: { type: 'depart', location: [0, 0] } }] }] }
+        ]
+      })
+    })
+  });
+  const route = await service.calculate({ profile: 'driving', origin: { lat: 0, lng: 0 }, destination: { lat: 1, lng: 1 } });
+  assert.equal(route.geometry.coordinates[1][0], 0.5);
+});
+
 test('serviÃ§o de rotas preserva rota vÃ¡lida quando o provedor desloca o pino para a via', async () => {
   const service = createRouteService({
     fetchImpl: async () => ({

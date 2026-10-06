@@ -126,6 +126,18 @@ export function calculateRoute(origin, destination) {
   });
 }
 
+export function reportRoutePerformance({ origin, destination, geometry, actualDurationSeconds, completedAt = Date.now() }) {
+  const coordinates = geometry?.coordinates || [];
+  const sampled = coordinates.length <= 64
+    ? coordinates
+    : coordinates.filter((_point, index) => index === 0 || index === coordinates.length - 1 || index % Math.ceil(coordinates.length / 64) === 0).slice(0, 64);
+  return requestJson('/api/route/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, geometry: { type: 'LineString', coordinates: sampled }, actualDurationSeconds, completedAt })
+  });
+}
+
 export function prepareOfflineGraph(route) {
   const coordinates = route?.geometry?.coordinates || [];
   const compactCoordinates = coordinates.length <= 256

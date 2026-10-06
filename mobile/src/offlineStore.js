@@ -18,7 +18,7 @@ const PERMISSION_PROMPT_PREFIX = 'permissions:prompted:';
 const MAX_FAVORITE_PLACES = 50;
 const MAX_RECENT_PLACES = 12;
 const MAX_ROUTE_ORIGINS = 10;
-const MAX_ROUTE_HISTORY = 10;
+const MAX_ROUTE_HISTORY = 5;
 const OFFLINE_ROUTE_PACKAGE_PREFIX = 'offline:route-package:';
 
 async function database() {
@@ -149,6 +149,26 @@ export async function removePendingRecognitionTrack(trackId) {
   if (!trackId) return;
   const db = await database();
   await db.runAsync('DELETE FROM offline_state WHERE key = ?', `recognition:pending:${trackId}`);
+}
+
+export async function savePendingRoutePerformance(feedback) {
+  if (!feedback?.feedbackId) return false;
+  await writeState(`route-performance:pending:${feedback.feedbackId}`, feedback);
+  return true;
+}
+
+export async function loadPendingRoutePerformance() {
+  const db = await database();
+  const rows = await db.getAllAsync("SELECT value FROM offline_state WHERE key LIKE 'route-performance:pending:%' ORDER BY updated_at ASC");
+  return rows.flatMap((row) => {
+    try { const value = JSON.parse(row.value); return value?.feedbackId ? [value] : []; } catch { return []; }
+  });
+}
+
+export async function removePendingRoutePerformance(feedbackId) {
+  if (!feedbackId) return;
+  const db = await database();
+  await db.runAsync('DELETE FROM offline_state WHERE key = ?', `route-performance:pending:${feedbackId}`);
 }
 
 function createParticipantToken() {

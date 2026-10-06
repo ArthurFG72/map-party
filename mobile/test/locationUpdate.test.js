@@ -51,8 +51,16 @@ test('descarta salto quilométrico ao iniciar navegação com o aparelho parado'
 test('não congela deslocamento real só porque o GPS informou velocidade residual baixa', () => {
   const stable = stabilizePosition(
     { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 0 },
-    { lat: -23.5503, lng: -46.6303, accuracy: 5, timestamp: 2_000, speed: 0.2 }
+    { lat: -23.55002, lng: -46.63002, accuracy: 5, timestamp: 2_000, speed: 0.2 }
   );
   assert.notEqual(stable, null);
-  assert.equal(stable.lat, -23.5503);
+  assert.equal(stable.lat, -23.55002);
+});
+
+test('descarta pequeno movimento fantasma que contradiz duas leituras paradas', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 0 },
+    { lat: -23.5502, lng: -46.6302, accuracy: 5, timestamp: 3_000, speed: 0 }
+  );
+  assert.equal(stable, null);
 });

@@ -2,17 +2,17 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Alert, AppState, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text as NativeText, TextInput, useWindowDimensions, View } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { askAssistant, calculateRoute, fetchEmergencyPublicKey, prepareOfflineGraph, searchNearbyPois, searchPlaces, searchPois } from '../api';
+import { askAssistant, calculateRoute, fetchEmergencyPublicKey, prepareOfflineGraph, reportRoutePerformance, searchNearbyPois, searchPlaces, searchPois } from '../api';
 import { createSealedEmergencyPacket } from '../emergencyPacket';
 import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
-import { buildNavigationGuidance, distanceMeters, snapPositionToRoute } from '../navigationGuidance';
+import { buildNavigationGuidance, distanceMeters } from '../navigationGuidance';
 import { CONNECTION_STATE, NAVIGATION_STATE, createNavigationState, transitionNavigation } from '../navigationState';
 import { executeNavigationCommand } from '../navigationCommandExecutor';
 import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from '../navigationVoice';
 import { assistantReplyForIntent, parseAssistantIntent } from '../assistantIntent';
 import { useSpeechAssistant } from '../hooks/useSpeechAssistant';
-import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
+import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadPendingRoutePerformance, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, removePendingRoutePerformance, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, savePendingRoutePerformance, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
 import { buildReturnPoints } from '../routeReturn';
 import { calculatePackagedOfflineRoute } from '../offlineNavigation';
 import { createOfflineRoutePackage } from '../offlineRoutePackage';
@@ -118,15 +118,6 @@ function markerCoordinate(location, participantId, participants, exact = false) 
     latitude: location.lat + Math.cos(angle) * offset,
     longitude: location.lng + Math.sin(angle) * offset
   };
-}
-
-function visualRoutePosition(route, location) {
-  if (!route || !location) return location;
-  const accuracy = Number(location.accuracy);
-  const snapLimit = Number.isFinite(accuracy)
-    ? Math.max(30, Math.min(80, accuracy * 1.5 + 20))
-    : 60;
-  return snapPositionToRoute(route, location, snapLimit);
 }
 
 function formatDistance(meters) {
@@ -258,6 +249,8 @@ export default function PartyScreen({ session, onLeave }) {
   const [navigationLocked, setNavigationLocked] = useState(false);
   const [navigationGuidance, setNavigationGuidance] = useState(null);
   const [completedRoute, setCompletedRoute] = useState(null);
+  const [routeDisplayEnabled, setRouteDisplayEnabled] = useState(true);
+  const [traveledMeters, setTraveledMeters] = useState(0);
   const [mapRefreshKey, setMapRefreshKey] = useState(0);
   const [recalculating, setRecalculating] = useState(false);
   const [sosSending, setSosSending] = useState(false);
@@ -273,6 +266,9 @@ export default function PartyScreen({ session, onLeave }) {
   const lastNavigationCameraRef = useRef(null);
   const lastFreeCameraPositionRef = useRef(null);
   const completedOriginRef = useRef(null);
+  const traveledMetersRef = useRef(0);
+  const navigationStartedAtRef = useRef(0);
+  const navigationTraceRef = useRef([]);
   const appStateRef = useRef(AppState.currentState);
   const restoreMapTimerRef = useRef(null);
   const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
@@ -315,7 +311,9 @@ export default function PartyScreen({ session, onLeave }) {
     appendRecognitionPoint(trackId, point).catch(() => undefined);
     setRecognitionPoints((current) => [...current.slice(-2499), point]);
   }, [location.position, recognitionTrack]);
-  const displayedRoute = navigationActive ? navigationRoute : (localRoute || party.sharedRoute || party.route);
+  const displayedRoute = routeDisplayEnabled
+    ? (navigationActive ? navigationRoute : (localRoute || party.sharedRoute || party.route))
+    : null;
   const offlineTileTemplate = useOfflineRouteTiles(displayedRoute);
   const ownParticipantId = party.participantId || party.participants.find((item) => item.name === session.name)?.id;
   const ownParticipantName = session.name.trim().toLocaleLowerCase('pt-BR');
@@ -582,7 +580,7 @@ export default function PartyScreen({ session, onLeave }) {
       if (!movedEnough && !headingChanged) return;
       lastNavigationCameraRef.current = { ...center, heading };
       try {
-        mapRef.current?.animateCamera({ center, zoom: maneuver ? 19 : 17, heading }, { duration: 250 });
+        mapRef.current?.animateCamera({ center, zoom: maneuver ? 19 : 18.5, heading }, { duration: 250 });
       } catch (error) {
         console.warn('[MapParty] navigation camera update failed', error?.message || error);
       }
@@ -610,8 +608,20 @@ export default function PartyScreen({ session, onLeave }) {
 
   useEffect(() => {
     if (!navigationActive || !location.position || !navigationRoute?.destination) return;
+    const lastTracePoint = navigationTraceRef.current.at(-1);
+    if (!lastTracePoint || location.position.timestamp > lastTracePoint.timestamp) {
+      navigationTraceRef.current = [...navigationTraceRef.current.slice(-499), location.position];
+    }
     const nextGuidance = buildNavigationGuidance(navigationRoute, location.position);
     if (!nextGuidance) return;
+    const routeDistance = Number(navigationRoute.distance);
+    if (Number.isFinite(routeDistance) && routeDistance > 0) {
+      const measuredProgress = Math.max(0, Math.min(routeDistance, routeDistance * (nextGuidance.progress || 0)));
+      if (measuredProgress >= traveledMetersRef.current) {
+        traveledMetersRef.current = measuredProgress;
+        setTraveledMeters(measuredProgress);
+      }
+    }
     offRouteReadingsRef.current = nextGuidance.offRoute ? offRouteReadingsRef.current + 1 : 0;
     setNavigationGuidance({
       ...nextGuidance,
@@ -624,6 +634,29 @@ export default function PartyScreen({ session, onLeave }) {
     }
     if (nextGuidance.arrived) {
       const finishedRoute = originalNavigationRouteRef.current || navigationRoute;
+      if (!temporaryStop && navigationStartedAtRef.current > 0 && finishedRoute?.geometry?.coordinates?.length > 1) {
+        const feedback = {
+          feedbackId: `route-feedback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          origin: finishedRoute.origin,
+          destination: finishedRoute.destination,
+          geometry: {
+            type: 'LineString',
+            coordinates: navigationTraceRef.current.length > 1
+              ? navigationTraceRef.current.map((point) => [point.lng, point.lat])
+              : finishedRoute.geometry.coordinates
+          },
+          actualDurationSeconds: Math.max(1, Math.round((Date.now() - navigationStartedAtRef.current) / 1000))
+        };
+        savePendingRoutePerformance(feedback).then(async () => {
+          if (!party.connected) return;
+          try {
+            await reportRoutePerformance(feedback);
+            await removePendingRoutePerformance(feedback.feedbackId);
+          } catch { /* Retry when the connection is available again. */ }
+        }).catch(() => undefined);
+      }
+      navigationStartedAtRef.current = 0;
+      navigationTraceRef.current = [];
       if (finishedRoute?.origin && finishedRoute?.destination) {
         completedOriginRef.current = { ...finishedRoute.origin };
         setCompletedRoute(finishedRoute);
@@ -632,6 +665,9 @@ export default function PartyScreen({ session, onLeave }) {
       voiceHistoryRef.current = {};
       setNavigationLocked(false);
       setNavigationGuidance(null);
+      traveledMetersRef.current = 0;
+      setTraveledMeters(0);
+      setRouteDisplayEnabled(false);
       setLocalRoute(null);
       // Keep the completed route available so the next action can return to
       // its original origin instead of losing the initial point.
@@ -644,7 +680,7 @@ export default function PartyScreen({ session, onLeave }) {
       transitionNavigationState({ type: 'navigation.cancel' });
       party.clearPersonalRoute();
     }
-  }, [location.position, navigationActive, navigationRoute, party.clearPersonalRoute]);
+  }, [location.position, navigationActive, navigationRoute, party.clearPersonalRoute, party.connected, temporaryStop]);
 
   useEffect(() => {
     if (!navigationActive) return undefined;
@@ -805,7 +841,8 @@ export default function PartyScreen({ session, onLeave }) {
         setLocalRoute(cachedRoute);
         routeOriginRef.current = next.origin;
         saveRouteOrigin(next.origin).then(setRouteOrigins);
-        saveRouteHistory(next.origin, next.destination).then(setRouteHistory);
+        setRouteDisplayEnabled(true);
+        setRouteHistory(await saveRouteHistory(next.origin, next.destination));
         savePartySnapshot(session.roomId, { participants: party.participants, route: cachedRoute });
         setMessage('Rota pessoal criada. Só será compartilhada com consentimento de todos.');
       } catch (error) {
@@ -1074,11 +1111,16 @@ export default function PartyScreen({ session, onLeave }) {
     offRouteReadingsRef.current = 0;
     if (!temporaryStop) originalNavigationRouteRef.current = routeToStart;
     routeOriginRef.current = routeToStart.origin || routeOriginRef.current;
+    setRouteDisplayEnabled(true);
+    traveledMetersRef.current = 0;
+    setTraveledMeters(0);
+    navigationStartedAtRef.current = Date.now();
+    navigationTraceRef.current = [currentPosition];
     setNavigationLocked(false);
     setNavigationGuidance(buildNavigationGuidance(routeToStart, currentPosition));
     transitionNavigationState({ type: 'navigation.start' });
     setMessage('Navegação iniciada. Siga a linha azul.');
-    mapRef.current?.animateToRegion({ latitude: currentPosition.lat, longitude: currentPosition.lng, latitudeDelta: 0.018, longitudeDelta: 0.018 }, 500);
+    mapRef.current?.animateCamera({ center: { latitude: currentPosition.lat, longitude: currentPosition.lng }, zoom: 18.5 }, { duration: 500 });
   }
 
   async function addTemporaryStop(point) {
@@ -1124,6 +1166,7 @@ export default function PartyScreen({ session, onLeave }) {
       party.clearPersonalRoute();
       setTemporaryStop(null);
       setLocalRoute(route);
+      setRouteDisplayEnabled(true);
       setPoints({ origin: location.position, destination: original.destination });
       setNavigationGuidance(buildNavigationGuidance(route, location.position));
       transitionNavigationState({ type: 'navigation.start' });
@@ -1154,6 +1197,11 @@ export default function PartyScreen({ session, onLeave }) {
       originalNavigationRouteRef.current = route;
       routeOriginRef.current = origin;
       setNavigationGuidance(buildNavigationGuidance(route, current));
+      setRouteDisplayEnabled(true);
+      traveledMetersRef.current = 0;
+      setTraveledMeters(0);
+      navigationStartedAtRef.current = Date.now();
+      navigationTraceRef.current = [current];
       transitionNavigationState({ type: 'navigation.start' });
       setMessage('Rota de volta iniciada.');
     } catch (error) {
@@ -1504,6 +1552,21 @@ export default function PartyScreen({ session, onLeave }) {
     return () => { active = false; };
   }, [party.connected, party.joined, party.publishExplorationTrack]);
 
+  useEffect(() => {
+    if (!party.connected || !party.joined) return undefined;
+    let active = true;
+    loadPendingRoutePerformance().then(async (pending) => {
+      for (const feedback of pending) {
+        if (!active) return;
+        try {
+          await reportRoutePerformance(feedback);
+          await removePendingRoutePerformance(feedback.feedbackId);
+        } catch { break; }
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [party.connected, party.joined]);
+
   const routeCoordinates = useMemo(() => displayedRoute?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [], [displayedRoute]);
   const recognitionCoordinates = useMemo(() => recognitionPoints.map((point) => ({ latitude: point.lat, longitude: point.lng })), [recognitionPoints]);
   const receivedRecognitionTracks = party.explorationTracks || [];
@@ -1514,10 +1577,6 @@ export default function PartyScreen({ session, onLeave }) {
   const favoriteIds = useMemo(() => new Set(favorites.map((place) => place.storageId)), [favorites]);
   const recentWithoutFavorites = useMemo(() => recentPlaces.filter((place) => !favoriteIds.has(place.storageId)), [favoriteIds, recentPlaces]);
   const progressPercent = Math.round((navigationGuidance?.progress || 0) * 100);
-  const routeDistance = Number(navigationRoute?.distance);
-  const traveledMeters = navigationGuidance && Number.isFinite(routeDistance)
-    ? Math.max(0, Math.min(routeDistance, routeDistance * (navigationGuidance.progress || 0)))
-    : null;
   const trafficSummary = navigationRoute?.traffic?.status === 'congestion' ? ' · trânsito colaborativo' : '';
   const connection = party.offline
     ? { label: 'OFFLINE', message: 'Sem conexão. Exibindo os últimos dados salvos e tentando reconectar.', color: '#f59e0b' }
@@ -1670,7 +1729,7 @@ export default function PartyScreen({ session, onLeave }) {
           const statusText = participantStatusText(participantStatuses.get(item.id));
           return <Marker
             key={item.id}
-            coordinate={markerCoordinate(Platform.OS === 'ios' ? item.location : visualRoutePosition(displayedRoute, item.location), item.id, party.participants, Boolean(displayedRoute))}
+             coordinate={markerCoordinate(item.location, item.id, party.participants)}
             tracksViewChanges
             anchor={EAGLE_MARKER_ANCHOR}
             centerOffset={EAGLE_MARKER_CENTER_OFFSET}
@@ -1701,6 +1760,35 @@ export default function PartyScreen({ session, onLeave }) {
           <View accessibilityRole="progressbar" accessibilityLabel="Progresso da rota" accessibilityValue={{ min: 0, max: 100, now: progressPercent, text: `${progressPercent}% concluído` }} style={styles.navigationProgressTrack}>
             <View style={[styles.navigationProgressFill, { width: `${progressPercent}%` }]} />
           </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.navigationPeopleRow}>
+            {party.participants.filter((item) => item.id !== ownParticipantId).map((item) => <Pressable
+              key={item.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Enviar mensagem para ${item.name}`}
+              onPress={() => setDirectRecipient(item)}
+              style={[styles.navigationPersonButton, directRecipient?.id === item.id && styles.navigationPersonButtonActive]}
+            >
+              <Text numberOfLines={1} style={styles.navigationPersonText}>{item.name}</Text>
+            </Pressable>)}
+          </ScrollView>
+          {directRecipient && <View style={styles.navigationDirectRow}>
+            <Text numberOfLines={1} style={styles.navigationDirectTarget}>{directRecipient.name}</Text>
+            <TextInput
+              value={directDraft}
+              onChangeText={setDirectDraft}
+              onSubmitEditing={sendDirectMessage}
+              placeholder="Mensagem"
+              maxLength={500}
+              returnKeyType="send"
+              style={styles.navigationDirectInput}
+            />
+            <Pressable onPress={sendDirectMessage} disabled={directSending || !directDraft.trim()} style={[styles.navigationDirectButton, (directSending || !directDraft.trim()) && styles.disabled]}>
+              <Text style={styles.navigationDirectButtonText}>{directSending ? '...' : 'Enviar'}</Text>
+            </Pressable>
+            <Pressable accessibilityLabel="Fechar mensagem" onPress={() => { setDirectRecipient(null); setDirectDraft(''); }} style={styles.navigationDirectClose}>
+              <Text style={styles.navigationDirectCloseText}>×</Text>
+            </Pressable>
+          </View>}
         </View>
         <View style={styles.navigationActions}>
           {navigationGuidance?.offRoute && <>
@@ -1709,7 +1797,7 @@ export default function PartyScreen({ session, onLeave }) {
               <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
             </Pressable>
           </>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posicao atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text style={styles.centerNavigationText}>Central-{`\n`}izar</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text style={styles.centerNavigationText}>Central{`\n`}izar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" accessibilityState={{ disabled: navigationLocked }} disabled={navigationLocked} onPress={stopNavigation} style={[styles.stopNavigation, navigationLocked && styles.disabled]}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
         </View>
         <View style={styles.lockedActions}>
@@ -2085,6 +2173,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.72 },
   personalRouteBadge: { display: 'none' }, navigationEyebrow: { display: 'none' },
   navigationCardText: { flex: 1, position: 'relative' }, navigationTraveled: { color: '#fff', fontSize: 12, lineHeight: 15, fontWeight: '900', marginBottom: 3 },
+  navigationPeopleRow: { gap: 5, paddingTop: 5, paddingRight: 4 }, navigationPersonButton: { maxWidth: 120, minHeight: 24, paddingHorizontal: 7, borderRadius: 7, backgroundColor: '#334155', justifyContent: 'center' }, navigationPersonButtonActive: { backgroundColor: '#0284c7' }, navigationPersonText: { color: '#e2e8f0', fontSize: 9, fontWeight: '800' }, navigationDirectRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 5 }, navigationDirectTarget: { maxWidth: 70, color: '#bae6fd', fontSize: 9, fontWeight: '800' }, navigationDirectInput: { flex: 1, minHeight: 27, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff', color: '#0f172a', fontSize: 10 }, navigationDirectButton: { minHeight: 27, paddingHorizontal: 7, borderRadius: 6, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }, navigationDirectButtonText: { color: '#fff', fontSize: 9, fontWeight: '900' }, navigationDirectClose: { paddingHorizontal: 2 }, navigationDirectCloseText: { color: '#bae6fd', fontSize: 18 },
   navigationEta: { color: '#a9b8ca', fontSize: 10, marginTop: 3, paddingRight: '42%' },
   navigationProgressTrack: { position: 'absolute', right: 0, bottom: 0, width: '38%', height: 4, marginTop: 0, borderRadius: 2, overflow: 'hidden', backgroundColor: '#334155' },
   centerNavigationText: { color: '#1d4ed8', fontSize: 9, lineHeight: 11, fontWeight: '900', textAlign: 'center' }

@@ -33,11 +33,20 @@ function auditRouteGeometry(candidate, origin, destination) {
     && distanceMeters({ lat: coordinate[1], lng: coordinate[0] }, { lat: location[1], lng: location[0] }) <= MANEUVER_TOLERANCE_METERS));
 }
 
+function respectsTurnRestrictions(rawLegs) {
+  return (rawLegs || []).every((leg) => (leg?.steps || []).every((step) => (step?.intersections || []).every((intersection) => {
+    const entry = intersection?.entry;
+    const out = intersection?.out;
+    return !Array.isArray(entry) || !Number.isInteger(out) || entry[out] !== false;
+  })));
+}
+
 export function createRouteService({
   baseUrl = process.env.OSRM_BASE_URL || 'https://router.project-osrm.org',
   fetchImpl = fetch,
   timeoutMs = 10_000,
-  trafficStore = null
+  trafficStore = null,
+  routeLearningStore = null
 } = {}) {
   return {
     async calculate(payload) {
@@ -60,6 +69,7 @@ export function createRouteService({
         const providerCandidates = Array.isArray(body?.routes)
           ? body.routes.filter((route) => Number.isFinite(route?.duration)
             && compactOsrmLegs(route?.legs)
+            && respectsTurnRestrictions(route?.legs)
             && endpointsWithinTolerance(route, origin, destination, ROUTE_ENDPOINT_FALLBACK_TOLERANCE_METERS))
           : [];
         // Geocoders may return a POI pin that OSRM snaps to the nearest
@@ -68,11 +78,20 @@ export function createRouteService({
         // candidate made valid address searches fail with PROVIDER_ERROR.
         const auditedCandidates = providerCandidates.filter((route) => auditRouteGeometry(route, origin, destination));
         const candidates = auditedCandidates.length > 0 ? auditedCandidates : providerCandidates;
-        const scored = candidates.map((route) => ({ route, traffic: trafficStore?.evaluate(route) || null }));
+        const scored = candidates.map((route) => {
+          const traffic = trafficStore?.evaluate({ ...route, origin, destination }) || null;
+          const learning = routeLearningStore?.evaluate({ ...route, origin, destination }) || null;
+          const trafficDuration = traffic?.adjustedDuration || route.duration;
+          const learningDuration = learning?.samples >= 2 ? learning.duration : route.duration;
+          return {
+            route,
+            traffic,
+            learning,
+            score: Math.round(trafficDuration * 0.7 + learningDuration * 0.3)
+          };
+        });
         const candidate = scored.sort((first, second) => {
-          const firstScore = first.traffic?.adjustedDuration || first.route.duration;
-          const secondScore = second.traffic?.adjustedDuration || second.route.duration;
-          return firstScore - secondScore;
+          return first.score - second.score;
         })[0];
         const selected = candidate?.route;
         const legs = compactOsrmLegs(selected?.legs);

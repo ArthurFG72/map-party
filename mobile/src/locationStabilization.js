@@ -22,6 +22,10 @@ export function stabilizePosition(previous, next) {
   const stationaryRadius = Math.min(35, Math.max(MIN_STATIONARY_MOVEMENT, accuracyLimit * 1.5));
   const measuredSpeed = distance / elapsedSeconds;
   if (previousSpeed < STATIONARY_SPEED && distance > 150 && elapsedSeconds < 30) return null;
+  // Ignore a short GPS jump that contradicts both consecutive low-speed fixes.
+  // A real move remains valid when its measured speed is plausible.
+  if (previousSpeed < STATIONARY_SPEED && reportedSpeed < STATIONARY_SPEED
+    && distance > stationaryRadius && measuredSpeed > Math.max(8, reportedSpeed * 3)) return null;
   // O valor de speed fornecido pelo sistema pode permanecer congelado por uma
   // leitura quando o veículo para. A distância/tempo entre duas posições é a
   // fonte de verdade para detectar a parada; não mantenha a velocidade antiga

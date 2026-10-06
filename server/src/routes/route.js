@@ -1,6 +1,7 @@
 import { Router } from 'express';
+import { acceptsContractVersion } from '../contracts.js';
 
-export function routeRouter(service, rateLimit) {
+export function routeRouter(service, rateLimit, routeLearningStore = null) {
   const router = Router();
   router.post('/', rateLimit, async (req, res) => {
     try {
@@ -17,6 +18,12 @@ export function routeRouter(service, rateLimit) {
         }
       });
     }
+  });
+  router.post('/feedback', rateLimit, (req, res) => {
+    const payload = req.body || {};
+    if (!acceptsContractVersion(payload)) return res.status(400).json({ error: { code: 'INVALID_ROUTE_FEEDBACK', message: 'Versão de contrato inválida.' } });
+    const recorded = routeLearningStore?.record(payload) === true;
+    return res.json({ ok: true, recorded });
   });
   return router;
 }
