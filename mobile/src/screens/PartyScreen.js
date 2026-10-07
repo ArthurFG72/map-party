@@ -2266,7 +2266,7 @@ export default function PartyScreen({ session, onLeave }) {
           {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); setShowSavedPlaces(true); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>{'\u00d7'}</Text></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
         </View>
-         {utilityMenuOpen && <View style={styles.utilityMenu}>
+          {false && <View style={styles.utilityMenu}>
          <View style={styles.assistantRow}>
           <Text style={styles.assistantIcon}>◉</Text>
           <TextInput
@@ -2367,7 +2367,7 @@ export default function PartyScreen({ session, onLeave }) {
             </View>;
           })}
         </ScrollView>}
-        {utilityMenuOpen && <View style={styles.utilityMenu}>
+         {false && <View style={styles.utilityMenu}>
           <Text style={styles.routeProfileTitle}>Tipo de deslocamento</Text>
           <View style={styles.routeProfileRow}>
             <Pressable accessibilityRole="button" accessibilityState={{ selected: routeProfile === 'driving' }} onPress={() => selectRouteProfile('driving')} style={[styles.routeProfileButton, routeProfile === 'driving' && styles.routeProfileButtonActive]}>
@@ -2455,7 +2455,7 @@ export default function PartyScreen({ session, onLeave }) {
           {routeProfile === 'boat' && <View style={styles.boatOriginBadge}><Text style={styles.boatOriginText}>Origem: GPS atual</Text></View>}
           <Pressable onPress={() => setActiveKind('destination')} style={[styles.segmentButton, activeKind === 'destination' && styles.destinationActive]}><Text style={[styles.segmentText, activeKind === 'destination' && styles.activeText]}>Destino</Text></Pressable>
            <Pressable onPress={useMyLocation} style={styles.locationButton}><Text style={styles.locationText}>Meu local</Text></Pressable>
-           <Pressable accessibilityRole="button" accessibilityLabel={utilityMenuOpen ? 'Fechar opções adicionais' : 'Abrir opções adicionais'} accessibilityState={{ expanded: utilityMenuOpen }} onPress={() => setUtilityMenuOpen((open) => !open)} style={[styles.utilityMenuButton, utilityMenuOpen && styles.utilityMenuButtonActive]}><Text style={styles.utilityMenuButtonText}>{utilityMenuOpen ? '−' : '+'}</Text></Pressable>
+           {false && <Pressable accessibilityRole="button" accessibilityLabel={utilityMenuOpen ? 'Fechar opções adicionais' : 'Abrir opções adicionais'} accessibilityState={{ expanded: utilityMenuOpen }} onPress={() => setUtilityMenuOpen((open) => !open)} style={[styles.utilityMenuButton, utilityMenuOpen && styles.utilityMenuButtonActive]}><Text style={styles.utilityMenuButtonText}>{utilityMenuOpen ? '−' : '+'}</Text></Pressable>}
         </View>}
 
         {party.route && <Text style={styles.routeSummary}>{formatDistance(party.route.distance)} · {formatDuration(party.route.duration)}{party.route.updatedBy?.name ? ` · por ${party.route.updatedBy.name}` : ''}{party.offline ? ' · rota em cache' : ''}{trafficSummary}</Text>}
