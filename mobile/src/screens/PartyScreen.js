@@ -320,7 +320,9 @@ export default function PartyScreen({ session, onLeave }) {
   // canReturnToOrigin while `location` is still in the temporal dead zone.
   const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
   const categoryKey = activeCategories.join(',');
-  const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
+  // A temporary detour is stored locally first. The shared/personal route is
+  // the original route and must not overwrite the active detour on rerender.
+  const navigationRoute = localRoute || party.personalRoute || party.sharedRoute || party.route;
   const returnOrigin = completedRoute?.origin
     || completedOriginRef.current
     || originalNavigationRouteRef.current?.origin;
@@ -843,7 +845,7 @@ export default function PartyScreen({ session, onLeave }) {
       setMessage('Desbloqueie o cadeado para adicionar um desvio à rota.');
       return false;
     }
-    if (navigationActive && !confirmed && kind === 'destination' && navigationRoute?.destination) {
+    if (navigationActive && !confirmed && kind === 'destination' && (navigationRoute?.destination || originalNavigationRouteRef.current?.destination)) {
       return addTemporaryStop(point);
     }
     if (navigationActive && !confirmed) {
@@ -1016,6 +1018,10 @@ export default function PartyScreen({ session, onLeave }) {
       label: result?.label || details.address || details.title,
       source: 'search'
     };
+    if (navigationActive && kind === 'destination' && (navigationRoute?.destination || originalNavigationRouteRef.current?.destination)) {
+      void addTemporaryStop(point);
+      return;
+    }
     void setPoint(kind, point);
   }
 
