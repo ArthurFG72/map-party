@@ -1366,18 +1366,41 @@ export default function PartyScreen({ session, onLeave }) {
     const latitude = Number(point?.lat);
     const longitude = Number(point?.lng);
     const original = originalNavigationRouteRef.current || navigationRoute;
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !original?.destination || !location.position) {
+    const currentPosition = location.position || locationPositionRef.current;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !original?.destination || !currentPosition) {
       setMessage('Aguarde o GPS para adicionar uma parada temporÃ¡ria.');
       return false;
     }
     const stop = { ...point, lat: latitude, lng: longitude };
+    searchInputRef.current?.blur();
+    Keyboard.dismiss();
     setLoading(true);
     setMessage(`Calculando parada em ${stop.name || stop.label || 'novo local'}â€¦`);
     try {
       const profile = navigationRoute?.profile || routeProfile;
-      const stopRoute = await calculateRoute(location.position, stop, profile);
-      const continuationRoute = await calculateRoute(stop, original.destination, profile);
-      const combinedRoute = combineDetourRoutes(stopRoute, continuationRoute, original, stop);
+      const offlinePackageId = original.offlinePackageId || navigationRoute?.offlinePackageId;
+      const offlinePackage = offlinePackageId ? await loadOfflineRoutePackage(offlinePackageId) : null;
+      const calculateLeg = async (from, to) => {
+        try {
+          const onlineRoute = await calculateRoute(from, to, profile);
+          if (!isUsableRoute(onlineRoute)) throw new Error('O servidor retornou uma rota inválida.');
+          return onlineRoute;
+        } catch (onlineError) {
+          const offlineResult = calculatePackagedOfflineRoute(offlinePackage, from, to);
+          if (offlineResult.ok && isUsableRoute(offlineResult.route)) return offlineResult.route;
+          throw new Error(offlinePackage
+            ? `Não foi possível calcular o trecho online nem no pacote offline (${offlineResult.code}).`
+            : `Não foi possível calcular o trecho do desvio: ${onlineError.message}`);
+        }
+      };
+      const stopRoute = await calculateLeg(currentPosition, stop);
+      const continuationRoute = await calculateLeg(stop, original.destination);
+      const combinedBaseRoute = combineDetourRoutes(stopRoute, continuationRoute, original, stop);
+      if (!isUsableRoute(combinedBaseRoute)) throw new Error('A rota combinada do desvio é inválida.');
+      const detourPackage = createOfflineRoutePackage(combinedBaseRoute);
+      const combinedRoute = detourPackage
+        ? { ...combinedBaseRoute, offlinePackageId: detourPackage.id }
+        : combinedBaseRoute;
       party.clearPersonalRoute();
       temporaryStopResumeRef.current = false;
       setTemporaryStop(stop);
@@ -1387,10 +1410,14 @@ export default function PartyScreen({ session, onLeave }) {
         setPlannedTripMeters(detourTotal);
       }
       setLocalRoute(combinedRoute);
-      setPoints({ origin: original.origin || routeOriginRef.current || location.position, destination: original.destination });
+      setPoints({ origin: original.origin || routeOriginRef.current || currentPosition, destination: original.destination });
       setTemporaryStopArmed(false);
       setDetourSearchOpen(false);
-      savePartyPoints(session.roomId, { origin: original.origin || routeOriginRef.current || location.position, destination: original.destination });
+      setQuery('');
+      setResults([]);
+      setShowSavedPlaces(false);
+      savePartyPoints(session.roomId, { origin: original.origin || routeOriginRef.current || currentPosition, destination: original.destination });
+      if (detourPackage) saveOfflineRoutePackage(detourPackage).catch(() => undefined);
       setMessage('Parada temporÃ¡ria definida. A rota original permanece guardada.');
       return true;
     } catch (error) {
