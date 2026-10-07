@@ -12,6 +12,7 @@ import { executeNavigationCommand } from '../navigationCommandExecutor';
 import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from '../navigationVoice';
 import { assistantReplyForIntent, parseAssistantIntent } from '../assistantIntent';
 import { useSpeechAssistant } from '../hooks/useSpeechAssistant';
+import { useSiriCommandBridge } from '../hooks/useSiriCommandBridge';
 import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadPendingRoutePerformance, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, removePendingRoutePerformance, saveFavoritePlace, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, savePendingRoutePerformance, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
 import { buildReturnPoints } from '../routeReturn';
 import { calculatePackagedOfflineRoute } from '../offlineNavigation';
@@ -286,6 +287,17 @@ export default function PartyScreen({ session, onLeave }) {
   const [assistantDraft, setAssistantDraft] = useState('');
   const [assistantReply, setAssistantReply] = useState('');
   const speechAssistant = useSpeechAssistant({ onFinalTranscript: (text) => submitAssistant(text), connectivityLevel: party.connectivity.level });
+  useSiriCommandBridge(async (command) => {
+    if (command === 'navigation.start') startNavigation();
+    else if (command === 'navigation.pause') transitionNavigationState({ type: 'navigation.pause' });
+    else if (command === 'navigation.resume') transitionNavigationState({ type: 'navigation.resume' });
+    else if (command === 'navigation.cancel') stopNavigation();
+    else if (command === 'navigation.get_status') {
+      const reply = assistantReplyForIntent({ type: 'navigation.get_status' });
+      setAssistantReply(reply);
+      await speakAssistantText(reply);
+    }
+  });
   const [routeSharePickerVisible, setRouteSharePickerVisible] = useState(false);
   const [routeShareSelection, setRouteShareSelection] = useState(() => new Set());
   const [authorizedRouteParticipantIds, setAuthorizedRouteParticipantIds] = useState(() => new Set());

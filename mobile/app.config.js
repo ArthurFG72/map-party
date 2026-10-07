@@ -9,6 +9,7 @@ plugins.push([
 ]);
 plugins.push('@maplibre/maplibre-react-native');
 plugins.push('./plugins/withNearbyConnections');
+plugins.push('./plugins/withSiriIntents');
 
 module.exports = {
   ...appJson,
