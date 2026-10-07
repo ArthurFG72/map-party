@@ -27,6 +27,7 @@
         ],
         "NSMicrophoneUsageDescription": "Permitir o microfone para ouvir comandos de navegaÃ§Ã£o.",
         "NSSpeechRecognitionUsageDescription": "Permitir o reconhecimento de voz para converter comandos em texto.",
+        "NSSiriUsageDescription": "Permitir que a Siri execute comandos de navegação do Map Party.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },

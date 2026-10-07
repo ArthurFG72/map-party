@@ -20,7 +20,9 @@ function recognitionOptions(voiceMode) {
   return {
     lang: 'pt-BR',
     interimResults: voiceMode.interimResults,
-    continuous: voiceMode.continuous,
+    // No iOS cada turno precisa terminar ao detectar silêncio. O hook mantém
+    // a sessão contínua e reinicia o reconhecimento depois da resposta.
+    continuous: Platform.OS === 'ios' ? false : voiceMode.continuous,
     ...(Platform.OS === 'ios'
       ? {
           iosTaskHint: 'search',
