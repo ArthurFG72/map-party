@@ -647,7 +647,8 @@ export default function PartyScreen({ session, onLeave }) {
       if (!movedEnough && !headingChanged) return;
       lastNavigationCameraRef.current = { ...center, heading };
       try {
-       mapRef.current?.animateCamera({ center, zoom: navigationZoomRef.current || (maneuver ? 19 : 18.5), heading }, { duration: 250 });
+        const targetZoom = maneuver ? 19 : (navigationZoomRef.current || 18.5);
+        mapRef.current?.animateCamera({ center, zoom: targetZoom, heading }, { duration: 250 });
       } catch (error) {
         console.warn('[MapParty] navigation camera update failed', error?.message || error);
       }
