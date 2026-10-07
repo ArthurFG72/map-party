@@ -12,7 +12,7 @@ on:
 jobs:
   build-ios-unsigned:
     # Use the stable Intel runner supported by the hosted macOS fleet.
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
