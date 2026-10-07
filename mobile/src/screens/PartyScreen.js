@@ -203,6 +203,19 @@ function markerRotation(position, navigationActive, headingRef) {
   return 0;
 }
 
+function isUsableRoute(route) {
+  const coordinates = route?.geometry?.coordinates;
+  const validPoint = (point) => Number.isFinite(Number(point?.lat)) && Number.isFinite(Number(point?.lng));
+  return validPoint(route?.origin)
+    && validPoint(route?.destination)
+    && Array.isArray(coordinates)
+    && coordinates.length >= 2
+    && coordinates.every((point) => Array.isArray(point)
+      && point.length >= 2
+      && Number.isFinite(Number(point[0]))
+      && Number.isFinite(Number(point[1])));
+}
+
 function isFuelSearch(value) {
   return /\b(posto|postos|combust[ií]vel|gasolina|abastecer)\b/i.test(String(value || ''));
 }
@@ -219,6 +232,7 @@ export default function PartyScreen({ session, onLeave }) {
   const [attentionPoints, setAttentionPoints] = useState([]);
   const [localRoute, setLocalRoute] = useState(null);
   const [temporaryStop, setTemporaryStop] = useState(null);
+  const [detourSearchOpen, setDetourSearchOpen] = useState(false);
   const [activeKind, setActiveKind] = useState('destination');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -281,6 +295,8 @@ export default function PartyScreen({ session, onLeave }) {
   const lastTraveledPositionRef = useRef(null);
   const navigationStartedAtRef = useRef(0);
   const navigationTraceRef = useRef([]);
+  const temporaryStopResumeRef = useRef(false);
+  const offlinePackageRequestRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
   const restoreMapTimerRef = useRef(null);
   const speedBubbleDragStartRef = useRef({ left: 0, top: 12 });
@@ -488,10 +504,14 @@ export default function PartyScreen({ session, onLeave }) {
           onPress: async () => {
             try {
               const reply = await party.respondRouteShareInvitation(invitation.invitationId, true);
-              if (!reply.route) return;
+              if (!isUsableRoute(reply.route)) {
+                setMessage('O convite foi aceito, mas a rota recebida é inválida. Solicite o compartilhamento novamente.');
+                return;
+              }
+              setRouteProfile(reply.route.profile === 'boat' ? 'boat' : 'driving');
               setLocalRoute(reply.route);
               setPoints({ origin: reply.route.origin, destination: reply.route.destination });
-              startNavigation(reply.route);
+              await startNavigation(reply.route);
             } catch (error) {
               setMessage(error.message);
             }
@@ -534,12 +554,18 @@ export default function PartyScreen({ session, onLeave }) {
 
   useEffect(() => {
     setLocalRoute(null);
-    if (!party.route) return;
+    const coordinates = party.route?.geometry?.coordinates;
+    if (!party.route || !Array.isArray(coordinates) || coordinates.length < 2) return;
     setRouteProfile(party.route.profile || 'driving');
     setPoints({ origin: party.route.origin, destination: party.route.destination });
     routeOriginRef.current = party.route.origin || null;
-    const coordinates = party.route.geometry.coordinates.map(([longitude, latitude]) => ({ latitude, longitude }));
-    if (coordinates.length > 1) mapRef.current?.fitToCoordinates(coordinates, {
+    const mapCoordinates = coordinates
+      .filter((coordinate) => Array.isArray(coordinate)
+        && coordinate.length >= 2
+        && Number.isFinite(Number(coordinate[0]))
+        && Number.isFinite(Number(coordinate[1])))
+      .map(([longitude, latitude]) => ({ latitude: Number(latitude), longitude: Number(longitude) }));
+    if (mapCoordinates.length > 1) mapRef.current?.fitToCoordinates(mapCoordinates, {
       edgePadding: { top: 48, right: 38, bottom: 48, left: 38 },
       animated: true
     });
@@ -667,6 +693,15 @@ export default function PartyScreen({ session, onLeave }) {
       recalculateRoute({ automatic: true });
     }
     if (nextGuidance.arrived) {
+      if (temporaryStop && originalNavigationRouteRef.current?.destination) {
+        if (!temporaryStopResumeRef.current) {
+          temporaryStopResumeRef.current = true;
+          resumeOriginalNavigation().finally(() => {
+            temporaryStopResumeRef.current = false;
+          });
+        }
+        return;
+      }
       const finishedRoute = originalNavigationRouteRef.current || navigationRoute;
       if (!temporaryStop && navigationStartedAtRef.current > 0 && finishedRoute?.geometry?.coordinates?.length > 1) {
         const feedback = {
@@ -883,22 +918,57 @@ export default function PartyScreen({ session, onLeave }) {
         // A publicação é complementar; uma recusa por falta de GPS compartilhado
         // não pode apagar a rota pessoal já calculada.
         party.publishRoute(requestedRoute).catch(() => undefined);
+        const packageRequestId = ++offlinePackageRequestRef.current;
         const baseOfflinePackage = createOfflineRoutePackage(route);
-        let offlineGraph;
-        try { offlineGraph = (await prepareOfflineGraph({ ...route, offlinePackageId: baseOfflinePackage?.id }))?.graph; } catch { offlineGraph = null; }
-        let offlinePackage = createOfflineRoutePackage({ ...route, offlineGraph }, { id: baseOfflinePackage?.id });
-        let offlineReady = offlinePackage && await saveOfflineRoutePackage(offlinePackage);
-        if (!offlineReady && offlineGraph) {
-          offlinePackage = createOfflineRoutePackage(route, { id: baseOfflinePackage?.id });
-          offlineReady = offlinePackage && await saveOfflineRoutePackage(offlinePackage);
-        }
-        const cachedRoute = offlineReady ? { ...route, offlinePackageId: offlinePackage.id } : route;
-        setLocalRoute(cachedRoute);
+        // Exibe a rota online imediatamente; a preparação offline não bloqueia
+        // o traçado nem o início da navegação.
+        setLocalRoute(route);
         routeOriginRef.current = next.origin;
         saveRouteOrigin(next.origin).then(setRouteOrigins);
         setRouteDisplayEnabled(true);
-        setRouteHistory(await saveRouteHistory(next.origin, next.destination));
-        savePartySnapshot(session.roomId, { participants: party.participants, route: cachedRoute });
+        saveRouteHistory(next.origin, next.destination).then(setRouteHistory).catch(() => undefined);
+        savePartySnapshot(session.roomId, { participants: party.participants, route });
+        void (async () => {
+          let offlineGraph;
+          try {
+            offlineGraph = (await prepareOfflineGraph({ ...route, offlinePackageId: baseOfflinePackage?.id }))?.graph;
+          } catch {
+            offlineGraph = null;
+          }
+          if (packageRequestId !== offlinePackageRequestRef.current) return;
+          let offlinePackage = createOfflineRoutePackage({ ...route, offlineGraph }, { id: baseOfflinePackage?.id });
+          let offlineReady = offlinePackage && await saveOfflineRoutePackage(offlinePackage);
+          if (!offlineReady && offlineGraph) {
+            offlinePackage = createOfflineRoutePackage(route, { id: baseOfflinePackage?.id });
+            offlineReady = offlinePackage && await saveOfflineRoutePackage(offlinePackage);
+          }
+          if (offlineReady && packageRequestId === offlinePackageRequestRef.current) {
+            const cachedRoute = { ...route, offlinePackageId: offlinePackage.id };
+            setLocalRoute(cachedRoute);
+            savePartySnapshot(session.roomId, { participants: party.participants, route: cachedRoute });
+          }
+          // If Overpass was unavailable, the fallback graph above is already
+          // usable offline. Retry silently later to enrich it with nearby OSM
+          // roads, without delaying or interrupting the active route.
+          if (!offlineGraph) {
+            for (const delayMs of [15_000, 60_000, 180_000]) {
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              if (packageRequestId !== offlinePackageRequestRef.current) return;
+              try {
+                offlineGraph = (await prepareOfflineGraph({ ...route, offlinePackageId: baseOfflinePackage?.id }))?.graph;
+              } catch {
+                offlineGraph = null;
+              }
+              if (!offlineGraph) continue;
+              const enrichedPackage = createOfflineRoutePackage({ ...route, offlineGraph }, { id: baseOfflinePackage?.id });
+              if (!enrichedPackage || !await saveOfflineRoutePackage(enrichedPackage)) continue;
+              const enrichedRoute = { ...route, offlinePackageId: enrichedPackage.id };
+              setLocalRoute(enrichedRoute);
+              savePartySnapshot(session.roomId, { participants: party.participants, route: enrichedRoute });
+              return;
+            }
+          }
+        })();
         setMessage('Rota pessoal criada. Só será compartilhada com consentimento de todos.');
       } catch (error) {
         setMessage(`Destino definido, mas não foi possível calcular a rota agora: ${error.message}`);
@@ -1228,6 +1298,7 @@ export default function PartyScreen({ session, onLeave }) {
     try {
       const stopRoute = await calculateRoute(location.position, stop, navigationRoute?.profile || routeProfile);
       party.clearPersonalRoute();
+      temporaryStopResumeRef.current = false;
       setTemporaryStop(stop);
       const detourTotal = traveledMetersRef.current + (Number.isFinite(stopRoute?.distance) ? stopRoute.distance : 0);
       if (detourTotal > plannedTripMetersRef.current) {
@@ -1236,6 +1307,8 @@ export default function PartyScreen({ session, onLeave }) {
       }
       setLocalRoute(stopRoute);
       setPoints({ origin: location.position, destination: stop });
+      setTemporaryStopArmed(false);
+      setDetourSearchOpen(false);
       savePartyPoints(session.roomId, { origin: location.position, destination: stop });
       setMessage('Parada temporÃ¡ria definida. A rota original permanece guardada.');
       return true;
@@ -1327,6 +1400,7 @@ export default function PartyScreen({ session, onLeave }) {
     setNavigationLocked(false);
     setNavigationGuidance(null);
     setTemporaryStopArmed(false);
+    temporaryStopResumeRef.current = false;
     setQuery('');
     setResults([]);
     setActiveKind('destination');
@@ -1665,6 +1739,30 @@ export default function PartyScreen({ session, onLeave }) {
     ]);
   }
 
+  function openNavigationMapMenu(point) {
+    if (navigationLocked) return;
+    Alert.alert('Ponto no mapa', 'Escolha o que deseja fazer neste local.', [
+      {
+        text: 'Marcar desvio',
+        onPress: () => {
+          setTemporaryStopArmed(true);
+          addTemporaryStop(point).catch(() => undefined);
+        }
+      },
+      {
+        text: 'Procurar End. Desvio',
+        onPress: () => {
+          setActiveKind('destination');
+          setDetourSearchOpen(true);
+          setMessage('Digite o endereço do desvio e selecione o resultado. A rota passará pelo desvio e manterá o destino original.');
+          setTimeout(() => searchInputRef.current?.focus?.(), 100);
+        }
+      },
+      { text: 'Marcar ponto de atenção', onPress: () => chooseAttentionPoint(point) },
+      { text: 'Cancelar', style: 'cancel' }
+    ]);
+  }
+
   async function publishRecognitionTrack() {
     const trackId = recognitionTrackRef.current?.id;
     if (!trackId) return setMessage('O registro ainda não foi iniciado.');
@@ -1713,7 +1811,16 @@ export default function PartyScreen({ session, onLeave }) {
     return () => { active = false; };
   }, [party.connected, party.joined]);
 
-  const routeCoordinates = useMemo(() => displayedRoute?.geometry?.coordinates?.map(([longitude, latitude]) => ({ latitude, longitude })) || [], [displayedRoute]);
+  const routeCoordinates = useMemo(() => {
+    const coordinates = displayedRoute?.geometry?.coordinates;
+    if (!Array.isArray(coordinates)) return [];
+    return coordinates
+      .filter((coordinate) => Array.isArray(coordinate)
+        && coordinate.length >= 2
+        && Number.isFinite(Number(coordinate[0]))
+        && Number.isFinite(Number(coordinate[1])))
+      .map(([longitude, latitude]) => ({ latitude: Number(latitude), longitude: Number(longitude) }));
+  }, [displayedRoute]);
   const recognitionCoordinates = useMemo(() => recognitionPoints.map((point) => ({ latitude: point.lat, longitude: point.lng })), [recognitionPoints]);
   const receivedRecognitionTracks = party.explorationTracks || [];
   const clusteredPois = useMemo(() => clusterPois(pois, visibleRegion, {
@@ -1760,8 +1867,9 @@ export default function PartyScreen({ session, onLeave }) {
          provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : undefined}
          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
          minZoomLevel={2}
-         maxZoomLevel={19}
-         rotateEnabled
+        maxZoomLevel={19}
+        zoomEnabled={!navigationActive}
+        rotateEnabled
         pitchEnabled={false}
         showsCompass={false}
         showsUserLocation={false}
@@ -1773,10 +1881,13 @@ export default function PartyScreen({ session, onLeave }) {
         onLongPress={(event) => {
           if (navigationLocked) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
-          chooseAttentionPoint({ lat, lng, timestamp: Date.now(), accuracy: 0 });
+          const point = { lat, lng, timestamp: Date.now(), accuracy: 0, label: 'Ponto selecionado no mapa', source: 'map' };
+          if (navigationActive) openNavigationMapMenu(point);
+          else chooseAttentionPoint(point);
         }}
         onPress={(event) => {
           if (navigationLocked) return;
+          if (navigationActive) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
           const now = Date.now();
           const previousTap = mapTapRef.current;
@@ -1973,8 +2084,8 @@ export default function PartyScreen({ session, onLeave }) {
               <Text style={styles.recalculateButtonText}>{recalculating ? 'Recalculando…' : 'Recalcular'}</Text>
             </Pressable>
           </>}
-          {!navigationLocked && <Pressable accessibilityRole="button" accessibilityLabel="Adicionar desvio temporário à rota" onPress={() => { setTemporaryStopArmed(true); setMessage('Desvio ativado. Dê dois toques no mapa para marcar a parada.'); }} style={styles.detourButton}>
-            <Text style={styles.detourButtonText}>{temporaryStopArmed ? 'Marque no mapa' : 'Adicionar desvio'}</Text>
+          {!navigationLocked && <Pressable accessibilityRole="button" accessibilityLabel="Adicionar desvio temporário à rota" onPress={() => { setTemporaryStopArmed(true); setMessage('Desvio ativado. Toque e segure no mapa para escolher a ação.'); }} style={styles.detourButton}>
+            <Text style={styles.detourButtonText}>{temporaryStopArmed ? 'Segure no mapa' : 'Adicionar desvio'}</Text>
           </Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Centralizar posição atual" onPress={centerOnMyLocation} style={styles.centerNavigation}><Text numberOfLines={2} style={styles.centerNavigationText}>Centra{`\n`}lizar</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Parar navegação" accessibilityState={{ disabled: navigationLocked }} disabled={navigationLocked} onPress={stopNavigation} style={[styles.stopNavigation, navigationLocked && styles.disabled]}><Text style={styles.stopNavigationText}>Parar</Text></Pressable>
@@ -1991,7 +2102,7 @@ export default function PartyScreen({ session, onLeave }) {
           </Pressable>
         </View>
       </View>}
-      <View pointerEvents={navigationActive ? 'none' : 'box-none'} style={[styles.mapControls, navigationActive && styles.navigationMapControls]}>
+      <View pointerEvents={navigationActive && !detourSearchOpen ? 'none' : 'box-none'} style={[styles.mapControls, navigationActive && styles.navigationMapControls]}>
         <View style={styles.floatingSearch}>
           <Text style={styles.searchIcon}>⌕</Text>
           <TextInput

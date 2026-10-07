@@ -65,6 +65,17 @@ test('descarta pequeno movimento fantasma que contradiz duas leituras paradas', 
   assert.equal(stable, null);
 });
 
+test('descarta deriva iOS curta entre duas leituras paradas', () => {
+  const stable = stabilizePosition(
+    { lat: -23.55, lng: -46.63, accuracy: 10, timestamp: 1_000, speed: 0 },
+    { lat: -23.54991, lng: -46.63, accuracy: 10, timestamp: 5_000, speed: 0 }
+  );
+  assert.equal(stable.lat, -23.55);
+  assert.equal(stable.lng, -46.63);
+  assert.equal(stable.speed, 0);
+  assert.equal(stable.timestamp, 5_000);
+});
+
 test('não reaproveita velocidade antiga quando o deslocamento medido é menor', () => {
   const stable = stabilizePosition(
     { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000, speed: 20 },

@@ -9,9 +9,13 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
 
   func configure(mode: String) {
     let navigation = mode == "navigation" || mode == "boat"
-    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : (navigation ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters)
-    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 10)
-    manager.pausesLocationUpdatesAutomatically = !navigation
+    // The iOS default/nearest-ten-metre mode is too coarse for the initial
+    // fix and can turn horizontal GPS noise into visible phantom movement.
+    // Use the native high-accuracy provider in tracking too; JS stabilization
+    // still rejects implausible jumps before they reach the map.
+    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 5)
+    manager.pausesLocationUpdatesAutomatically = false
     manager.activityType = mode == "navigation" ? .automotiveNavigation : (mode == "boat" ? .otherNavigation : .other)
     manager.allowsBackgroundLocationUpdates = navigation || mode == "tracking"
   }
@@ -41,6 +45,7 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
     guard let location = locations.last else { return }
+    guard location.horizontalAccuracy >= 0 else { return }
     owner?.sendLocation(location)
   }
 

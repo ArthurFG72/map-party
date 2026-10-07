@@ -30,7 +30,14 @@ export function stabilizePosition(previous, next) {
   // leitura quando o veículo para. A distância/tempo entre duas posições é a
   // fonte de verdade para detectar a parada; não mantenha a velocidade antiga
   // apenas porque o GPS repetiu um speed positivo.
+  // iOS can report a few metres of horizontal drift while the device is
+  // stopped. When both fixes say "almost stopped", keep the newest timestamp
+  // but do not turn that drift into movement/speed in the UI.
   if (distance <= stationaryRadius && measuredSpeed < 1.2) {
+    return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
+  }
+  if (distance >= MIN_STATIONARY_MOVEMENT && distance <= stationaryRadius && measuredSpeed < 4
+    && previousSpeed < STATIONARY_SPEED && reportedSpeed < STATIONARY_SPEED) {
     return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
   }
   const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);
