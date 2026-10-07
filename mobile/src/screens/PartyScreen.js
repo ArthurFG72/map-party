@@ -322,6 +322,8 @@ export default function PartyScreen({ session, onLeave }) {
   const lastRecalculationAtRef = useRef(0);
   const lastNavigationCameraRef = useRef(null);
   const navigationZoomRef = useRef(null);
+  const centerAfterRouteRef = useRef(null);
+  const centerAfterRouteTimerRef = useRef(null);
   const navigationCameraGestureUntilRef = useRef(0);
   const lastFreeCameraPositionRef = useRef(null);
   const lastMapRegionRef = useRef(INITIAL_REGION);
@@ -599,6 +601,17 @@ export default function PartyScreen({ session, onLeave }) {
     setLocalRoute(null);
     const coordinates = party.route?.geometry?.coordinates;
     if (!party.route || !Array.isArray(coordinates) || coordinates.length < 2) return;
+    const requestedCenter = centerAfterRouteRef.current;
+    if (requestedCenter && Date.now() - requestedCenter.requestedAt < 15_000) {
+      centerAfterRouteRef.current = null;
+      clearTimeout(centerAfterRouteTimerRef.current);
+      mapRef.current?.animateCamera({
+        center: { latitude: requestedCenter.position.lat, longitude: requestedCenter.position.lng },
+        zoom: 17,
+        heading: cameraHeading(requestedCenter.position, headingRef)
+      }, { duration: 500 });
+      return;
+    }
     setRouteProfile(party.route.profile || 'driving');
     setPoints({ origin: party.route.origin, destination: party.route.destination });
     routeOriginRef.current = party.route.origin || null;
@@ -1230,6 +1243,11 @@ export default function PartyScreen({ session, onLeave }) {
       currentPosition = await waitForLocationFix();
     }
     if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a permissão de localização e tente novamente.');
+    clearTimeout(centerAfterRouteTimerRef.current);
+    centerAfterRouteRef.current = { position: currentPosition, requestedAt: Date.now() };
+    centerAfterRouteTimerRef.current = setTimeout(() => {
+      centerAfterRouteRef.current = null;
+    }, 15_000);
     await setPoint(activeKind, { lat: currentPosition.lat, lng: currentPosition.lng, label: 'Minha localização', source: 'geolocation' });
     mapRef.current?.animateCamera({
       center: { latitude: currentPosition.lat, longitude: currentPosition.lng },
@@ -1271,9 +1289,13 @@ export default function PartyScreen({ session, onLeave }) {
       currentPosition = await waitForLocationFix();
     }
     if (!currentPosition) return setMessage('Não foi possível obter uma posição GPS válida. Verifique a permissão de localização e tente novamente.');
-    // Keep the camera centered on the same projected coordinate rendered by
-    // the eagle while navigating, not on the raw GPS fix.
-    const center = ownMarkerLocation || currentPosition;
+    if (navigationActive) {
+      navigationZoomRef.current = 17;
+      lastNavigationCameraRef.current = null;
+      navigationCameraGestureUntilRef.current = Date.now() + 1_200;
+    }
+    // Keep the camera centered on the real GPS coordinate rendered by the eagle.
+    const center = currentPosition;
     const camera = {
       center: { latitude: center.lat, longitude: center.lng },
       zoom: 17,
