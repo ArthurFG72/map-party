@@ -626,6 +626,12 @@ test('convite de rota pendente Ã© reenviado quando o participante retorna', as
   const invitation = await firstInvitation;
   assert.equal((await emitAck(target, 'respond-route-share', { invitationId: invitation.invitationId, accepted: true })).ok, true);
 
+  const reverseInvitationPromise = once(owner, 'route-share-invitation');
+  const reverseShare = await emitAck(target, 'request-route-share', { targetParticipantIds: [ownerJoin.participantId] });
+  assert.equal(reverseShare.ok, true);
+  const reverseInvitation = await reverseInvitationPromise;
+  assert.equal(reverseInvitation.participantId, targetJoin.participantId);
+
   target.disconnect();
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal((await emitAck(owner, 'request-route-share', { targetParticipantIds: [targetJoin.participantId] })).ok, true);

@@ -293,7 +293,18 @@ export class PartyStore {
     const invitation = membership?.room.routeShareInvitations.get(invitationId);
     if (!membership || !invitation || invitation.targetParticipantId !== membership.participantId) return null;
     membership.room.routeShareInvitations.delete(invitationId);
-    if (accepted) membership.room.routePermissions.set(`${membership.participantId}:${invitation.senderParticipantId}`, true);
+    if (accepted) {
+      membership.room.routePermissions.set(`${membership.participantId}:${invitation.senderParticipantId}`, true);
+      // An accepted route becomes shareable by the recipient as well. Keep a
+      // server-side copy because the original route only exists in the
+      // recipient's local navigation state after the invitation is accepted.
+      membership.room.personalRoutes.set(membership.participantId, {
+        ...invitation.route,
+        scope: 'personal',
+        sharedFromParticipantId: invitation.senderParticipantId,
+        sharedAt: Date.now()
+      });
+    }
     return { ...membership, invitation, accepted: Boolean(accepted) };
   }
 
