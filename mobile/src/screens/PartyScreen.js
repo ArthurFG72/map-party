@@ -124,6 +124,12 @@ function formatDistance(meters) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 }
 
+function zoomFromRegion(region, fallback = 18.5) {
+  const latitudeDelta = Number(region?.latitudeDelta);
+  if (!Number.isFinite(latitudeDelta) || latitudeDelta <= 0) return fallback;
+  return Math.max(2, Math.min(19, Math.log2(360 / latitudeDelta)));
+}
+
 function formatSpeedValue(position, notBefore = 0) {
   const timestamp = Number(position?.timestamp);
   // Sem uma leitura recente não há velocidade atual confiável. Mostrar zero
@@ -287,6 +293,7 @@ export default function PartyScreen({ session, onLeave }) {
   const recalculationRef = useRef(false);
   const lastRecalculationAtRef = useRef(0);
   const lastNavigationCameraRef = useRef(null);
+  const navigationZoomRef = useRef(null);
   const lastFreeCameraPositionRef = useRef(null);
   const lastMapRegionRef = useRef(INITIAL_REGION);
   const completedOriginRef = useRef(null);
@@ -610,6 +617,15 @@ export default function PartyScreen({ session, onLeave }) {
   }, [party.connectivity.capabilities.canLoadPois, party.connectivity.level, visibleRegion, categoryKey]);
 
   useEffect(() => {
+    if (!navigationActive) {
+      navigationZoomRef.current = null;
+      return undefined;
+    }
+    if (navigationZoomRef.current == null) navigationZoomRef.current = 18.5;
+    return undefined;
+  }, [navigationActive]);
+
+  useEffect(() => {
     if (!location.position) return;
     if (navigationActive) {
       const maneuver = navigationGuidance?.precisionMode && navigationGuidance.maneuverPoint
@@ -631,7 +647,7 @@ export default function PartyScreen({ session, onLeave }) {
       if (!movedEnough && !headingChanged) return;
       lastNavigationCameraRef.current = { ...center, heading };
       try {
-        mapRef.current?.animateCamera({ center, zoom: maneuver ? 19 : 18.5, heading }, { duration: 250 });
+       mapRef.current?.animateCamera({ center, zoom: navigationZoomRef.current || (maneuver ? 19 : 18.5), heading }, { duration: 250 });
       } catch (error) {
         console.warn('[MapParty] navigation camera update failed', error?.message || error);
       }
@@ -1874,16 +1890,17 @@ export default function PartyScreen({ session, onLeave }) {
          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
          minZoomLevel={2}
         maxZoomLevel={19}
-        zoomEnabled={!navigationActive}
+         zoomEnabled
         rotateEnabled
         pitchEnabled={false}
         showsCompass={false}
         showsUserLocation={false}
         showsPointsOfInterest={false}
-        onRegionChangeComplete={(region) => {
-          lastMapRegionRef.current = region;
-          setVisibleRegion(region);
-        }}
+         onRegionChangeComplete={(region) => {
+           lastMapRegionRef.current = region;
+           if (navigationActive) navigationZoomRef.current = zoomFromRegion(region, navigationZoomRef.current || 18.5);
+           setVisibleRegion(region);
+         }}
         onLongPress={(event) => {
           if (navigationLocked) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
