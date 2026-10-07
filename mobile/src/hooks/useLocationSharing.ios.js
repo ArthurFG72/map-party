@@ -18,6 +18,10 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
   useEffect(() => {
     if (!enabled) return undefined;
     let mounted = true;
+    // A mode transition must not carry the last tracking fix/speed into a
+    // newly started navigation session.
+    positionRef.current = null;
+    setPosition(null);
     const native = requireOptionalNativeModule('MapPartyLocation');
     if (!native) {
       setPermissionGranted(null);

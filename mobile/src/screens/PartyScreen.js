@@ -124,12 +124,12 @@ function formatDistance(meters) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 }
 
-function formatSpeedValue(position) {
+function formatSpeedValue(position, notBefore = 0) {
   const timestamp = Number(position?.timestamp);
   // Sem uma leitura recente não há velocidade atual confiável. Mostrar zero
   // evita deixar congelada a última velocidade enquanto o aparelho está parado
   // ou aguardando o próximo fix nativo.
-  if (!Number.isFinite(timestamp) || Date.now() - timestamp > 4_000) return '0';
+  if (!Number.isFinite(timestamp) || timestamp < notBefore || Date.now() - timestamp > 4_000) return '0';
   const speed = Number(position?.speed);
   return Number.isFinite(speed) && speed >= 0 ? String(Math.round(speed * 3.6)) : '--';
 }
@@ -306,6 +306,10 @@ export default function PartyScreen({ session, onLeave }) {
   const lastRecognitionTimestampRef = useRef(0);
   const locationPositionRef = useRef(null);
   const assistantHistoryRef = useRef([]);
+  // This hook must be initialized before any derived value reads
+  // location.position. Otherwise accepting a shared route can evaluate
+  // canReturnToOrigin while `location` is still in the temporal dead zone.
+  const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
   const categoryKey = activeCategories.join(',');
   const navigationRoute = party.personalRoute || localRoute || party.sharedRoute || party.route;
   const returnOrigin = completedRoute?.origin
@@ -321,7 +325,6 @@ export default function PartyScreen({ session, onLeave }) {
   // optou por não compartilhar sua posição com a party.
   // O GPS local não pode depender do ACK do socket. A posição também é
   // necessária para centralizar, pesquisar por proximidade e montar a rota.
-  const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
   locationPositionRef.current = location.position;
   useEffect(() => {
     let active = true;
@@ -1746,7 +1749,7 @@ export default function PartyScreen({ session, onLeave }) {
         text: 'Marcar desvio',
         onPress: () => {
           setTemporaryStopArmed(true);
-          addTemporaryStop(point).catch(() => undefined);
+          addTemporaryStop(point).catch((error) => setMessage(`Não foi possível adicionar o desvio: ${error.message}`));
         }
       },
       {
@@ -1754,6 +1757,9 @@ export default function PartyScreen({ session, onLeave }) {
         onPress: () => {
           setActiveKind('destination');
           setDetourSearchOpen(true);
+          setQuery('');
+          setResults([]);
+          setShowSavedPlaces(false);
           setMessage('Digite o endereço do desvio e selecione o resultado. A rota passará pelo desvio e manterá o destino original.');
           setTimeout(() => searchInputRef.current?.focus?.(), 100);
         }
@@ -2013,7 +2019,7 @@ export default function PartyScreen({ session, onLeave }) {
         accessibilityLabel={`Velocidade atual ${formatSpeedValue(location.position)} quilômetros por hora. Segure e arraste para reposicionar.`}
         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
       >
-        <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position)}</Text>
+        <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position, navigationStartedAtRef.current)}</Text>
         <Text style={styles.speedBubbleUnit}>km/h</Text>
       </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
@@ -2102,7 +2108,7 @@ export default function PartyScreen({ session, onLeave }) {
           </Pressable>
         </View>
       </View>}
-      <View pointerEvents={navigationActive && !detourSearchOpen ? 'none' : 'box-none'} style={[styles.mapControls, navigationActive && styles.navigationMapControls]}>
+      <View pointerEvents={navigationActive && !detourSearchOpen ? 'none' : 'box-none'} style={[styles.mapControls, navigationActive && !detourSearchOpen && styles.navigationMapControls]}>
         <View style={styles.floatingSearch}>
           <Text style={styles.searchIcon}>⌕</Text>
           <TextInput

@@ -36,8 +36,7 @@ export function stabilizePosition(previous, next) {
   if (distance <= stationaryRadius && measuredSpeed < 1.2) {
     return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
   }
-  if (distance >= MIN_STATIONARY_MOVEMENT && distance <= stationaryRadius && measuredSpeed < 4
-    && previousSpeed < STATIONARY_SPEED && reportedSpeed < STATIONARY_SPEED) {
+  if (distance >= MIN_STATIONARY_MOVEMENT && distance <= stationaryRadius && measuredSpeed < 4) {
     return { ...previous, timestamp: next.timestamp, accuracy: Math.min(previous.accuracy || next.accuracy, next.accuracy), speed: 0 };
   }
   const maximumDistance = MAX_REALISTIC_SPEED * elapsedSeconds + (previous.accuracy || 0) + (next.accuracy || 0);
