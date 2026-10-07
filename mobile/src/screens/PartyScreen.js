@@ -332,6 +332,7 @@ export default function PartyScreen({ session, onLeave }) {
   const navigationStartedAtRef = useRef(0);
   const navigationTraceRef = useRef([]);
   const navigationBaselinePendingRef = useRef(false);
+  const navigationBaselineTimestampRef = useRef(0);
   const temporaryStopResumeRef = useRef(false);
   const offlinePackageRequestRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
@@ -720,6 +721,12 @@ export default function PartyScreen({ session, onLeave }) {
     // Distância percorrida é uma medição do deslocamento real do aparelho.
     // Ela não depende da geometria, progresso ou recálculo da rota atual.
     const baselinePending = navigationBaselinePendingRef.current;
+    const baselineFixReady = !baselinePending
+      || Number(location.position.timestamp) > navigationBaselineTimestampRef.current;
+    if (baselinePending && !baselineFixReady) {
+      setDisplaySpeedKmh(0);
+      return;
+    }
     const previousTraveledPosition = baselinePending ? null : lastTraveledPositionRef.current;
     if (!previousTraveledPosition || location.position.timestamp > previousTraveledPosition.timestamp) {
       if (previousTraveledPosition) {
@@ -1345,6 +1352,7 @@ export default function PartyScreen({ session, onLeave }) {
     navigationStartedAtRef.current = Date.now();
     navigationTraceRef.current = [currentPosition];
     navigationBaselinePendingRef.current = true;
+    navigationBaselineTimestampRef.current = Number(currentPosition.timestamp) || Date.now();
     lastTraveledPositionRef.current = currentPosition;
     setTemporaryStopArmed(false);
     setNavigationLocked(false);
