@@ -9,6 +9,7 @@ private enum MapPartySiriCommand {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyStartNavigationIntent: AppIntent {
   static var title: LocalizedStringResource = "Iniciar navegação"
   static var openAppWhenRun: Bool = true
@@ -19,6 +20,7 @@ struct MapPartyStartNavigationIntent: AppIntent {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyPauseNavigationIntent: AppIntent {
   static var title: LocalizedStringResource = "Pausar navegação"
   static var openAppWhenRun: Bool = true
@@ -29,6 +31,7 @@ struct MapPartyPauseNavigationIntent: AppIntent {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyResumeNavigationIntent: AppIntent {
   static var title: LocalizedStringResource = "Retomar navegação"
   static var openAppWhenRun: Bool = true
@@ -39,6 +42,7 @@ struct MapPartyResumeNavigationIntent: AppIntent {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyStopNavigationIntent: AppIntent {
   static var title: LocalizedStringResource = "Cancelar navegação"
   static var openAppWhenRun: Bool = true
@@ -49,6 +53,7 @@ struct MapPartyStopNavigationIntent: AppIntent {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyNavigationStatusIntent: AppIntent {
   static var title: LocalizedStringResource = "Consultar navegação"
   static var openAppWhenRun: Bool = true
@@ -59,6 +64,7 @@ struct MapPartyNavigationStatusIntent: AppIntent {
   }
 }
 
+@available(iOS 16.0, *)
 struct MapPartyShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     [
