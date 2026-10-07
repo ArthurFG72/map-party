@@ -280,6 +280,7 @@ export default function PartyScreen({ session, onLeave }) {
   const [routeDisplayEnabled, setRouteDisplayEnabled] = useState(true);
   const [traveledMeters, setTraveledMeters] = useState(0);
   const [plannedTripMeters, setPlannedTripMeters] = useState(0);
+  const [displaySpeedKmh, setDisplaySpeedKmh] = useState(0);
   const [mapRefreshKey, setMapRefreshKey] = useState(0);
   const [recalculating, setRecalculating] = useState(false);
   const [sosSending, setSosSending] = useState(false);
@@ -294,6 +295,7 @@ export default function PartyScreen({ session, onLeave }) {
   const lastRecalculationAtRef = useRef(0);
   const lastNavigationCameraRef = useRef(null);
   const navigationZoomRef = useRef(null);
+  const navigationCameraGestureUntilRef = useRef(0);
   const lastFreeCameraPositionRef = useRef(null);
   const lastMapRegionRef = useRef(INITIAL_REGION);
   const completedOriginRef = useRef(null);
@@ -628,6 +630,7 @@ export default function PartyScreen({ session, onLeave }) {
   useEffect(() => {
     if (!location.position) return;
     if (navigationActive) {
+      if (Date.now() < navigationCameraGestureUntilRef.current) return;
       const maneuver = navigationGuidance?.precisionMode && navigationGuidance.maneuverPoint
         ? navigationGuidance.maneuverPoint
         : null;
@@ -691,6 +694,8 @@ export default function PartyScreen({ session, onLeave }) {
       if (previousTraveledPosition) {
         const segmentMeters = distanceMeters(previousTraveledPosition, location.position);
         const elapsedSeconds = Math.max(0.1, (location.position.timestamp - previousTraveledPosition.timestamp) / 1000);
+        const measuredSpeed = segmentMeters / elapsedSeconds;
+        setDisplaySpeedKmh(segmentMeters >= 8 && measuredSpeed >= 1.5 ? Math.min(90, measuredSpeed * 3.6) : 0);
         // Ignore impossible GPS jumps; they must never inflate the trip total.
         if (Number.isFinite(segmentMeters) && segmentMeters >= 1 && segmentMeters / elapsedSeconds <= 100) {
           const nextTraveledMeters = traveledMetersRef.current + segmentMeters;
@@ -698,6 +703,7 @@ export default function PartyScreen({ session, onLeave }) {
           setTraveledMeters(nextTraveledMeters);
         }
       }
+      if (!previousTraveledPosition) setDisplaySpeedKmh(0);
       lastTraveledPositionRef.current = location.position;
     }
     const nextGuidance = buildNavigationGuidance(navigationRoute, location.position);
@@ -1291,6 +1297,7 @@ export default function PartyScreen({ session, onLeave }) {
     setRouteDisplayEnabled(true);
     traveledMetersRef.current = 0;
     setTraveledMeters(0);
+    setDisplaySpeedKmh(0);
     plannedTripMetersRef.current = Number.isFinite(routeToStart.distance) ? routeToStart.distance : 0;
     setPlannedTripMeters(plannedTripMetersRef.current);
     navigationStartedAtRef.current = Date.now();
@@ -1897,9 +1904,20 @@ export default function PartyScreen({ session, onLeave }) {
         showsCompass={false}
         showsUserLocation={false}
         showsPointsOfInterest={false}
-         onRegionChangeComplete={(region) => {
+         onRegionChangeComplete={(region, details) => {
            lastMapRegionRef.current = region;
-           if (navigationActive) navigationZoomRef.current = zoomFromRegion(region, navigationZoomRef.current || 18.5);
+           if (navigationActive) {
+             navigationZoomRef.current = zoomFromRegion(region, navigationZoomRef.current || 18.5);
+             if (details?.isGesture) {
+               navigationCameraGestureUntilRef.current = Date.now() + 1200;
+               const previous = lastNavigationCameraRef.current;
+               lastNavigationCameraRef.current = {
+                 latitude: region.latitude,
+                 longitude: region.longitude,
+                 heading: previous?.heading ?? null
+               };
+             }
+           }
            setVisibleRegion(region);
          }}
         onLongPress={(event) => {
@@ -2037,7 +2055,7 @@ export default function PartyScreen({ session, onLeave }) {
         accessibilityLabel={`Velocidade atual ${formatSpeedValue(location.position)} quilômetros por hora. Segure e arraste para reposicionar.`}
         style={[styles.speedBubble, { left: speedBubbleCustomizedRef.current ? speedBubblePosition.left : defaultSpeedBubbleLeft, top: speedBubblePosition.top }]}
       >
-        <Text style={styles.speedBubbleValue}>{formatSpeedValue(location.position, navigationStartedAtRef.current)}</Text>
+        <Text style={styles.speedBubbleValue}>{Number.isFinite(displaySpeedKmh) ? String(Math.round(displaySpeedKmh)) : '0'}</Text>
         <Text style={styles.speedBubbleUnit}>km/h</Text>
       </View>}
       {navigationActive && <View style={[styles.navigationCard, navigationGuidance?.offRoute && styles.navigationCardOffRoute, { minHeight: 86, padding: 9 }]}>
