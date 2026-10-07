@@ -226,6 +226,33 @@ function isFuelSearch(value) {
   return /\b(posto|postos|combust[ií]vel|gasolina|abastecer)\b/i.test(String(value || ''));
 }
 
+function combineDetourRoutes(firstLeg, secondLeg, originalRoute, stop) {
+  const firstCoordinates = firstLeg?.geometry?.coordinates || [];
+  const secondCoordinates = secondLeg?.geometry?.coordinates || [];
+  const coordinates = [...firstCoordinates];
+  if (secondCoordinates.length) {
+    const startsAtSamePoint = coordinates.length
+      && coordinates.at(-1)?.[0] === secondCoordinates[0]?.[0]
+      && coordinates.at(-1)?.[1] === secondCoordinates[0]?.[1];
+    coordinates.push(...secondCoordinates.slice(startsAtSamePoint ? 1 : 0));
+  }
+  return {
+    ...secondLeg,
+    profile: originalRoute?.profile || firstLeg?.profile || secondLeg?.profile,
+    origin: originalRoute?.origin || firstLeg?.origin,
+    destination: originalRoute?.destination || secondLeg?.destination,
+    geometry: { type: 'LineString', coordinates },
+    distance: (Number(firstLeg?.distance) || 0) + (Number(secondLeg?.distance) || 0),
+    duration: (Number(firstLeg?.duration) || 0) + (Number(secondLeg?.duration) || 0),
+    legs: [...(firstLeg?.legs || []), ...(secondLeg?.legs || [])],
+    detour: {
+      point: { ...stop },
+      originalOrigin: originalRoute?.origin ? { ...originalRoute.origin } : null,
+      originalDestination: originalRoute?.destination ? { ...originalRoute.destination } : null
+    }
+  };
+}
+
 export default function PartyScreen({ session, onLeave }) {
   const mapRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -720,8 +747,14 @@ export default function PartyScreen({ session, onLeave }) {
     if (!nextGuidance.arrived && stableOffRoute && cooldownElapsed && !recalculationRef.current) {
       recalculateRoute({ automatic: true });
     }
+    const reachedTemporaryStop = temporaryStop && distanceMeters(location.position, temporaryStop) <= 35;
+    if (reachedTemporaryStop) {
+      setTemporaryStop(null);
+      temporaryStopResumeRef.current = false;
+      setMessage('Parada alcançada. Continuando para o destino original.');
+    }
     if (nextGuidance.arrived) {
-      if (temporaryStop && originalNavigationRouteRef.current?.destination) {
+      if (temporaryStop && !reachedTemporaryStop && originalNavigationRouteRef.current?.destination) {
         if (!temporaryStopResumeRef.current) {
           temporaryStopResumeRef.current = true;
           resumeOriginalNavigation().finally(() => {
@@ -1329,20 +1362,23 @@ export default function PartyScreen({ session, onLeave }) {
     setLoading(true);
     setMessage(`Calculando parada em ${stop.name || stop.label || 'novo local'}â€¦`);
     try {
-      const stopRoute = await calculateRoute(location.position, stop, navigationRoute?.profile || routeProfile);
+      const profile = navigationRoute?.profile || routeProfile;
+      const stopRoute = await calculateRoute(location.position, stop, profile);
+      const continuationRoute = await calculateRoute(stop, original.destination, profile);
+      const combinedRoute = combineDetourRoutes(stopRoute, continuationRoute, original, stop);
       party.clearPersonalRoute();
       temporaryStopResumeRef.current = false;
       setTemporaryStop(stop);
-      const detourTotal = traveledMetersRef.current + (Number.isFinite(stopRoute?.distance) ? stopRoute.distance : 0);
+      const detourTotal = traveledMetersRef.current + (Number.isFinite(combinedRoute?.distance) ? combinedRoute.distance : 0);
       if (detourTotal > plannedTripMetersRef.current) {
         plannedTripMetersRef.current = detourTotal;
         setPlannedTripMeters(detourTotal);
       }
-      setLocalRoute(stopRoute);
-      setPoints({ origin: location.position, destination: stop });
+      setLocalRoute(combinedRoute);
+      setPoints({ origin: original.origin || routeOriginRef.current || location.position, destination: original.destination });
       setTemporaryStopArmed(false);
       setDetourSearchOpen(false);
-      savePartyPoints(session.roomId, { origin: location.position, destination: stop });
+      savePartyPoints(session.roomId, { origin: original.origin || routeOriginRef.current || location.position, destination: original.destination });
       setMessage('Parada temporÃ¡ria definida. A rota original permanece guardada.');
       return true;
     } catch (error) {
