@@ -331,6 +331,7 @@ export default function PartyScreen({ session, onLeave }) {
   const lastTraveledPositionRef = useRef(null);
   const navigationStartedAtRef = useRef(0);
   const navigationTraceRef = useRef([]);
+  const navigationBaselinePendingRef = useRef(false);
   const temporaryStopResumeRef = useRef(false);
   const offlinePackageRequestRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
@@ -718,7 +719,8 @@ export default function PartyScreen({ session, onLeave }) {
     }
     // Distância percorrida é uma medição do deslocamento real do aparelho.
     // Ela não depende da geometria, progresso ou recálculo da rota atual.
-    const previousTraveledPosition = lastTraveledPositionRef.current;
+    const baselinePending = navigationBaselinePendingRef.current;
+    const previousTraveledPosition = baselinePending ? null : lastTraveledPositionRef.current;
     if (!previousTraveledPosition || location.position.timestamp > previousTraveledPosition.timestamp) {
       if (previousTraveledPosition) {
         const segmentMeters = distanceMeters(previousTraveledPosition, location.position);
@@ -732,8 +734,9 @@ export default function PartyScreen({ session, onLeave }) {
           setTraveledMeters(nextTraveledMeters);
         }
       }
-      if (!previousTraveledPosition) setDisplaySpeedKmh(0);
+      if (!previousTraveledPosition || baselinePending) setDisplaySpeedKmh(0);
       lastTraveledPositionRef.current = location.position;
+      navigationBaselinePendingRef.current = false;
     }
     const nextGuidance = buildNavigationGuidance(navigationRoute, location.position);
     if (!nextGuidance) return;
@@ -1341,6 +1344,7 @@ export default function PartyScreen({ session, onLeave }) {
     setPlannedTripMeters(plannedTripMetersRef.current);
     navigationStartedAtRef.current = Date.now();
     navigationTraceRef.current = [currentPosition];
+    navigationBaselinePendingRef.current = true;
     lastTraveledPositionRef.current = currentPosition;
     setTemporaryStopArmed(false);
     setNavigationLocked(false);
