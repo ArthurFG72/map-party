@@ -10,6 +10,9 @@ export function useGeolocation({ enabled, onLocation }) {
     if (!navigator.geolocation) { setStatus('Geolocalização indisponível'); return undefined; }
     setStatus('Solicitando localização…');
     const watchId = navigator.geolocation.watchPosition(({ coords, timestamp }) => {
+      if (![coords.latitude, coords.longitude, coords.accuracy].every(Number.isFinite)
+        || coords.latitude < -90 || coords.latitude > 90 || coords.longitude < -180 || coords.longitude > 180
+        || coords.accuracy < 0) return;
       setStatus(`Precisão aproximada: ${Math.round(coords.accuracy)} m`);
       const now = Date.now();
       const previous = lastSent.current;

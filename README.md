@@ -11,6 +11,8 @@ MVP de mapa compartilhado em tempo real. Uma pessoa cria uma party, envia o link
 
 O cliente emite `join-party`, `send-location` e `update-route` com ACK e timeout. O servidor determina a sala e a identidade pelo socket conectado, valida todos os dados e publica `participants-snapshot`, `participant-location` e `route-updated`. Cada rota recebe revisão, horário e autor definidos pelo servidor. No `disconnect`, remove o participante e, se necessário, a sala. Repetir o join na mesma sala é idempotente; trocar de sala também atualiza quem ficou na sala anterior.
 
+Ao entrar, cada pessoa escolhe se sua posição será visível. Quando desativada, o servidor continua aceitando a conexão e a pessoa pode usar o GPS localmente, mas não publica sua posição para a party. O controle pode ser alterado durante a sessão pelo próprio usuário.
+
 As consultas externas passam pelo backend em `/api/geocode`, `/api/route` e `/api/pois`. Isso centraliza timeout, validação, CORS e limites de uso, evita dependência direta do navegador nos provedores e permite configurar instâncias próprias. A geocodificação usa cache TTL/LRU e respeita um intervalo global mínimo de um segundo entre chamadas ao Nominatim. Os POIs usam cache de cinco minutos, limite de área e no máximo 200 resultados por consulta.
 
 Cada party aceita no máximo 50 sockets. Há limites simples por socket de 30 localizações e 10 rotas por minuto, além de limite de 2.000 coordenadas por geometria e 128 KB por mensagem Socket.io (o cliente recusa rotas acima de 120 KB para reservar a sobrecarga do protocolo). Esses controles reduzem abuso acidental, mas não substituem autenticação ou infraestrutura de produção.
@@ -50,17 +52,39 @@ Para testar no iPhone:
 2. Conecte o computador e o iPhone à mesma rede Wi-Fi.
 3. Em um terminal, execute `npm start` para iniciar o servidor na porta `3001`.
 4. Em outro terminal, execute `npm run mobile`.
-5. Leia o QR Code com a câmera do iPhone e abra no Expo Go.
+5. Leia o QR Code com a câmera do iPhone e abra no Expo Go. Isso abre o projeto dentro do Expo Go; não instala o Map Party como aplicativo independente.
+
+Para garantir que o Metro abra o bundle atualizado no Expo Go, feche a sessão
+anterior e use `npm run start:go:ios -w mobile` (o comando já limpa o cache)
+na mesma rede do iPhone. Se a rede local bloquear a descoberta, use
+`npm run start:go:tunnel -w mobile`. Leia o QR novo, não reutilize uma sessão
+antiga do Expo Go. O arquivo `mobile/.env` deve apontar
+`EXPO_PUBLIC_SERVER_URL` para o servidor HTTPS publicado; o Expo Go não deve
+usar `localhost` para acessar o backend pelo iPhone.
 
 O aplicativo descobre automaticamente o IP do computador usado pelo Metro e conecta o backend na porta `3001`. Se a rede exigir outro endereço, copie `mobile/.env.example` para `mobile/.env`, ajuste `EXPO_PUBLIC_SERVER_URL` e reinicie o Expo.
+
+Ao entrar em uma party, o app nativo solicita a permissão de localização em primeiro plano. Em um build nativo, ele também solicita a permissão de localização em segundo plano para manter o GPS ativo durante uma rota minimizada; no Android isso usa o serviço em primeiro plano e no iOS o modo `location`. O projeto não solicita câmera, microfone, contatos ou armazenamento porque nenhuma função atual precisa desses dados. A câmera só deve ser adicionada caso o produto passe a ler QR Code ou capturar imagens.
 
 O protótipo permite criar ou entrar em uma party, compartilhar o código, acompanhar participantes, enviar o GPS, selecionar origem/destino no mapa nativo, pesquisar endereços e sincronizar a rota. Ao aproximar o mapa, os filtros **Restaurantes** e **Postos** carregam POIs da área visível. Tocar em um marcador abre ações para usá-lo como origem ou traçar uma rota até ele. O rastreamento ocorre somente enquanto o aplicativo está aberto.
 
 O Expo Go usa Apple Maps como mapa-base no iPhone. Isso mantém o teste gratuito e sem configuração de chave, mas essa camada específica é proprietária. O código do Map Party permanece MIT e busca/rotas continuam usando OpenStreetMap, Nominatim e OSRM.
 
-Para gerar posteriormente um aplicativo próprio para TestFlight/App Store, use o perfil de build presente em `mobile/eas.json`. Essa etapa exige uma conta Expo e credenciais Apple.
+Para gerar posteriormente um aplicativo próprio para TestFlight/App Store, use o perfil de build presente em `mobile/eas.json`. Essa etapa exige uma conta Expo e credenciais Apple. No Android, `npx eas build --platform android --profile preview` gera um APK instalável para teste; no iOS, o build precisa ser instalado via TestFlight ou Xcode.
+
+Abrir o endereço do servidor no celular não instala o aplicativo nativo: esse endereço entrega a versão web/PWA no navegador. O app React Native é um artefato separado, gerado pelo Expo/EAS. Depois de instalado, ele solicita ao sistema permissão de localização em primeiro plano ao entrar em uma party e, quando disponível, permissão adicional para continuar o rastreamento em segundo plano. O app não solicita câmera porque não usa leitura de QR nem captura de imagens; a câmera usada para ler o QR do Expo Go pertence ao próprio Expo Go.
+
+## Cliente instalável por sistema
+
+O servidor central atende tanto o PWA quanto o aplicativo nativo pelo mesmo contrato HTTP/Socket.io. Em Android e navegadores desktop compatíveis, a página inicial oferece a instalação do PWA quando o navegador disponibiliza `beforeinstallprompt`. No iPhone/iPad, o Safari mostra as instruções para **Compartilhar → Adicionar à Tela de Início**. Esses dois caminhos instalam o cliente web; para GPS em segundo plano e publicação nas lojas, gere o cliente nativo de `mobile/` com EAS e distribua o APK/AAB no Android ou o build TestFlight/App Store no iOS.
+
+Abrir o endereço do servidor não baixa um aplicativo nativo automaticamente: ele entrega a página web do PWA. Para gerar o instalador do cliente, execute `eas build --platform android --profile preview` para um APK de teste ou `eas build --platform ios --profile preview` para distribuição interna. Depois de publicar esses artefatos, a página web poderá apontar para os respectivos downloads por sistema operacional.
 
 O código deste projeto é distribuído sob a licença MIT, presente em `LICENSE`. Os dados do OpenStreetMap continuam sujeitos à ODbL e exigem atribuição.
+
+## Links de instalação publicados
+
+Configure `APP_ANDROID_URL` e/ou `APP_IOS_URL` no servidor com URLs HTTPS reais para que a página inicial mostre os instaladores por sistema. O endpoint `/api/app-downloads` retorna somente os links configurados. `EXPO_GO_URL` pode apontar para o fluxo de teste do Expo Go. Sem links publicados, o cliente oferece apenas PWA e instruções; não inventa APK ou IPA.
 
 ## Versão web instalável
 
@@ -72,7 +96,28 @@ Esta versão permanece disponível como alternativa, mas não é o aplicativo Re
 
 ### Modo offline no Expo Go
 
-O aplicativo guarda a última party, rota, pontos e posição em SQLite. Sem conexão, o GPS continua funcionando e as posições recebidas anteriormente são projetadas por velocidade/rumo, marcadas como estimadas e com opacidade reduzida. A última localização é enfileirada para sincronizar quando a conexão voltar. Uma rota nova, busca, POIs e atualizações de outras pessoas ainda precisam de rede; mapa-base e recálculo completo offline exigem um build nativo próprio.
+Na versao mobile atual, uma rota calculada com conexao gera um pacote offline
+compacto em SQLite, com corredor limitado, geometria, tiles da rota e grafo
+local. O backend tenta completar esse pacote com um grafo real de vias OSM por
+corredor em `/api/offline/graph`; se Overpass falhar, o pacote leve da propria
+geometria continua disponivel. A orientacao e o recálculo dentro do corredor
+validado nao dependem do servidor.
+
+O assistente conversacional usa Gemini Flash quando `GEMINI_API_KEY` está configurada somente no servidor. O app nunca recebe essa chave: em rede limitada ou enquanto a chave não estiver disponível, usa o parser local e a navegação offline. A rota `POST /api/assistant` retorna texto ou uma chamada de ferramenta estruturada para busca e navegação.
+provedor envia comandos estruturados autenticados para `/api/navigation/commands`.
+O JEV permanece somente como assistente interno de contexto e decisao.
+
+O aplicativo guarda a última party, rota, pontos e posição em SQLite. Sem conexão, o GPS continua funcionando e as posições recebidas anteriormente são projetadas por velocidade/rumo, marcadas como estimadas e com opacidade reduzida. A última localização é enfileirada para sincronizar quando a conexão voltar. Em um build nativo, o app também solicita permissão de localização em segundo plano e grava a última posição recebida pelo sistema mesmo quando a tela é minimizada; o Android mantém um serviço em primeiro plano e o iOS usa o modo `location`. Uma rota nova, busca, POIs e atualizações de outras pessoas ainda precisam de rede; mapa-base e recálculo completo offline exigem um build nativo próprio com mapas e grafo de navegação distribuídos no aparelho.
+
+Para reduzir dados móveis em aparelhos antigos, o cliente envia somente a última posição pendente por sala, limita atualizações a cada alguns segundos e reaproveita a rota armazenada em vez de recalculá-la. Sem cobertura, a orientação continua usando a geometria e as instruções da última rota salva; o recálculo depende da rede ou de um futuro pacote de mapas/grafo offline.
+
+O app inclui uma camada local leve com fila limitada de mensagens. No Expo Go ela funciona como fallback offline e não adiciona dependências; um build nativo futuro pode fornecer `globalThis.MapPartyLocalTransport` com `start`, `stop`, `send` e `onMessage` para Bluetooth/Wi-Fi ponto a ponto. A posição continua sendo transmitida pelo GPS e Socket.io quando houver rede. A descoberta entre aparelhos só fica ativa quando esse módulo nativo opcional estiver instalado.
+
+Limites do Expo Go no iOS: o GPS em primeiro plano, SQLite, voz, tiles em
+cache e recálculo do pacote offline podem ser testados; o transporte BLE/Wi-Fi
+nativo, modos de segundo plano completos e permissões específicas de produção
+exigem um development build ou TestFlight. O teste no Expo Go não substitui o
+aceite físico do aplicativo nativo.
 
 ### Backend público para teste entre redes
 

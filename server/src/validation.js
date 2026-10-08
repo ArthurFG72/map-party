@@ -3,6 +3,7 @@ import { acceptsContractVersion, CONTRACT_VERSION } from './contracts.js';
 const ROOM_ID_RE = /^[a-z0-9-]{4,48}$/;
 const COMMAND_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const PARTICIPANT_TOKEN_RE = /^[A-Za-z0-9._~-]{32,256}$/;
+const DEVICE_ID_RE = /^nav_[a-z0-9]{16,48}$/;
 export const MAX_ROUTE_COORDINATES = 2000;
 export const MAX_ROUTE_LEGS = 8;
 export const MAX_ROUTE_STEPS = 500;
@@ -46,10 +47,20 @@ export function cleanCommandId(value) {
   return COMMAND_ID_RE.test(commandId) ? commandId : null;
 }
 
+export function cleanDeviceId(value) {
+  if (typeof value !== 'string') return null;
+  const deviceId = value.trim();
+  return DEVICE_ID_RE.test(deviceId) ? deviceId : null;
+}
+
 export function cleanParticipantToken(value) {
   if (typeof value !== 'string') return null;
   const token = value.trim();
   return PARTICIPANT_TOKEN_RE.test(token) ? token : null;
+}
+
+export function cleanVisibility(value) {
+  return value == null ? true : value === true;
 }
 
 export function cleanRouteRevision(value) {
@@ -59,6 +70,10 @@ export function cleanRouteRevision(value) {
 export function cleanRouteScope(value) {
   if (value == null) return 'shared';
   return value === 'shared' || value === 'personal' ? value : null;
+}
+
+export function cleanRouteProfile(value) {
+  return value == null ? 'driving' : (value === 'driving' || value === 'boat' ? value : null);
 }
 
 export function cleanLocationSequence(value) {
@@ -175,10 +190,11 @@ function cleanLegs(value) {
 
 export function cleanRoute(value) {
   if (!value || typeof value !== 'object' || !acceptsContractVersion(value)) return null;
+  const profile = cleanRouteProfile(value.profile);
   const origin = cleanPoint(value.origin);
   const destination = cleanPoint(value.destination);
   const coords = value.geometry?.coordinates;
-  if (!origin || !destination || value.geometry?.type !== 'LineString' || !Array.isArray(coords)) return null;
+  if (!profile || !origin || !destination || value.geometry?.type !== 'LineString' || !Array.isArray(coords)) return null;
   if (coords.length < 2 || coords.length > MAX_ROUTE_COORDINATES) return null;
   const coordinates = [];
   for (const item of coords) {
@@ -190,6 +206,7 @@ export function cleanRoute(value) {
   if (legs === null) return null;
   const route = {
     contractVersion: CONTRACT_VERSION,
+    profile,
     origin,
     destination,
     geometry: { type: 'LineString', coordinates },
@@ -197,6 +214,16 @@ export function cleanRoute(value) {
     duration: value.duration
   };
   if (legs) route.legs = legs;
+  if (value.traffic && typeof value.traffic === 'object'
+    && (value.traffic.status === 'normal' || value.traffic.status === 'congestion')
+    && finiteInRange(value.traffic.factor, 1, 2.5)
+    && Number.isSafeInteger(value.traffic.sampledSegments) && value.traffic.sampledSegments > 0) {
+    route.traffic = {
+      status: value.traffic.status,
+      factor: value.traffic.factor,
+      sampledSegments: value.traffic.sampledSegments
+    };
+  }
   return route;
 }
 
@@ -219,9 +246,11 @@ function cleanRouteCommandMetadata(value) {
 
 export function cleanRouteIntent(value) {
   if (!value || typeof value !== 'object' || !acceptsContractVersion(value)) return null;
-  if (value.profile != null && value.profile !== 'driving') return null;
+  const profile = cleanRouteProfile(value.profile);
   const origin = cleanPoint(value.origin);
   const destination = cleanPoint(value.destination);
+  const routeOrigin = value.routeOrigin == null ? null : cleanPoint(value.routeOrigin);
+  if (value.routeOrigin != null && !routeOrigin) return null;
   const metadata = cleanRouteCommandMetadata(value);
   const scope = cleanRouteScope(value.scope);
   if (!origin || !destination || !metadata || !scope) return null;
@@ -231,9 +260,10 @@ export function cleanRouteIntent(value) {
   return {
     contractVersion: CONTRACT_VERSION,
     scope,
-    profile: 'driving',
+    profile,
     origin,
     destination,
+    ...(routeOrigin ? { routeOrigin } : {}),
     ...metadata
   };
 }

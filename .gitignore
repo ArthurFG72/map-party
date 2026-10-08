@@ -8,3 +8,15 @@ coverage/
 .tools/
 mobile/dist-ios/
 .maestri/
+data/
+.quarantine-*/
+.tmp-*/
+/*.apk
+/*.aab
+/*.ipa
+/*.zip
+/*.tgz
+/dist-*/
+/*.png
+/*.xml
+/*.log

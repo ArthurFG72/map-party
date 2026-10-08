@@ -13,6 +13,7 @@ import { classifyConnectivity, connectivityCapabilities, CONNECTIVITY_LEVEL } fr
 const EARTH_RADIUS_METERS = 6_371_000;
 const LOCATION_HEARTBEAT_MS = 10_000;
 const LOCATION_MIN_MOVEMENT_METERS = 4;
+const LOCATION_DISPLAY_MAX_AGE_MS = 30_000;
 
 function locationDistanceMeters(first, second) {
   if (!first || !second) return Number.POSITIVE_INFINITY;
@@ -39,7 +40,7 @@ function projectLocation(location, now) {
   const ageMs = Math.max(0, now - Number(location.timestamp || now));
   // Never invent movement from a stale fix. The last real coordinate is kept
   // visible and explicitly marked stale until a new GPS fix arrives.
-  return { ...location, estimated: ageMs >= 10_000, stale: ageMs > 120_000, ageMs };
+  return { ...location, estimated: ageMs >= 10_000, stale: ageMs > LOCATION_DISPLAY_MAX_AGE_MS, ageMs };
 }
 
 export function useParty(roomId, name, visible = true) {

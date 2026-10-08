@@ -5,7 +5,7 @@ import PartyPanel from '../components/PartyPanel.jsx';
 import { useGeolocation } from '../hooks/useGeolocation.js';
 import { useParty } from '../hooks/useParty.js';
 import { fetchRoute } from '../lib/api.js';
-import { normalizeName, saveName, storedName } from '../lib/identity.js';
+import { normalizeName, saveName, saveVisibility, storedName, storedVisibility } from '../lib/identity.js';
 
 const MAX_ROUTE_BYTES = 120_000;
 
@@ -14,13 +14,14 @@ export default function Party() {
   const navigate = useNavigate();
   const [name, setName] = useState(storedName);
   const [draftName, setDraftName] = useState(storedName);
+  const [visible, setVisible] = useState(storedVisibility);
   const [mode, setMode] = useState(null);
   const [points, setPoints] = useState({ origin: null, destination: null });
   const [focusPoint, setFocusPoint] = useState(null);
   const [message, setMessage] = useState('');
   const [online, setOnline] = useState(navigator.onLine);
   const validRoom = /^[a-z0-9-]{4,48}$/.test(roomId);
-  const party = useParty(validRoom && name ? roomId : '', name);
+  const party = useParty(validRoom && name ? roomId : '', name, visible);
   const locationStatus = useGeolocation({ enabled: Boolean(validRoom && name && party.joined), onLocation: party.sendLocation });
 
   useEffect(() => {
@@ -63,7 +64,7 @@ export default function Party() {
     event.preventDefault();
     const clean = normalizeName(draftName);
     if (clean.length < 2) return setMessage('Digite um nome com pelo menos 2 caracteres.');
-    saveName(clean); setName(clean); setMessage('');
+    saveName(clean); saveVisibility(visible); setName(clean); setMessage('');
   }
 
   async function share() {
@@ -82,10 +83,10 @@ export default function Party() {
   }
 
   if (!validRoom) return <main className="grid min-h-full place-items-center p-5"><section className="text-center"><p className="text-red-700">Código de party inválido.</p><button onClick={() => navigate('/')} className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-white">Voltar</button></section></main>;
-  if (!name) return <main className="grid min-h-full place-items-center p-5"><form onSubmit={join} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow"><h1 className="text-xl font-bold">Entrar na party</h1><label htmlFor="join-name" className="mt-5 block text-sm font-medium">Seu nome</label><input id="join-name" autoFocus maxLength={40} value={draftName} onChange={(event) => setDraftName(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2" />{message && <p className="mt-2 text-sm text-red-600">{message}</p>}<button className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-2 text-white">Entrar</button></form></main>;
+  if (!name) return <main className="grid min-h-full place-items-center p-5"><form onSubmit={join} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow"><h1 className="text-xl font-bold">Entrar na party</h1><label htmlFor="join-name" className="mt-5 block text-sm font-medium">Seu nome</label><input id="join-name" autoFocus maxLength={40} value={draftName} onChange={(event) => setDraftName(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2" /><label className="mt-3 flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={visible} onChange={(event) => setVisible(event.target.checked)} className="mt-1" />Compartilhar minha posição com a party</label>{message && <p className="mt-2 text-sm text-red-600">{message}</p>}<button className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-2 text-white">Entrar</button></form></main>;
 
   return <main className="flex h-full min-h-0 flex-col md:flex-row">
-    <PartyPanel roomId={roomId} connected={party.connected} joined={party.joined} participants={party.participants} route={party.route} points={points} locationStatus={locationStatus} mode={mode} onMode={setMode} onSelectPoint={selectPoint} onShare={share} />
+    <PartyPanel roomId={roomId} connected={party.connected} joined={party.joined} participants={party.participants} route={party.route} points={points} locationStatus={locationStatus} mode={mode} onMode={setMode} onSelectPoint={selectPoint} onShare={share} visible={visible} onVisibilityChange={(nextVisible) => { setVisible(nextVisible); saveVisibility(nextVisible); party.setVisibility(nextVisible); }} />
     <section className="relative min-h-0 flex-1">
       <PartyMap participants={party.participants} route={party.route} points={points} focusPoint={focusPoint} selectionMode={mode} onPick={pickPoint} />
       {mode && <div className="pointer-events-none absolute left-1/2 top-3 z-[1000] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow">Clique para marcar {mode === 'origin' ? 'a origem' : 'o destino'}</div>}

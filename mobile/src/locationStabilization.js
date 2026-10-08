@@ -1,6 +1,7 @@
 const STATIONARY_SPEED = 2.5;
 const MIN_STATIONARY_MOVEMENT = 8;
 const MAX_REALISTIC_SPEED = 90;
+const MIN_CONFIRMED_MOVEMENT_METERS = 2;
 
 function distanceMeters(first, second) {
   const lat = (second.lat - first.lat) * Math.PI / 180;
@@ -52,12 +53,28 @@ export function classifyMovement(previous, next, evidence = 0) {
     || next.timestamp <= previous.timestamp) return { moving: false, confirmed: false, score: 0, meters: 0, speed: 0 };
   const elapsedSeconds = Math.max(0.1, (next.timestamp - previous.timestamp) / 1000);
   const meters = distanceMeters(previous, next);
-  const accuracy = Math.max(1, Math.min(20, Number(previous.accuracy) || Number(next.accuracy) || 5));
-  const movementThreshold = Math.max(1.5, Math.min(6, accuracy * 0.4));
-  const stationaryRadius = Math.max(3, Math.min(10, accuracy * 0.6));
+  // A GPS fix is an area of uncertainty, not an exact point. Use the worse
+  // accuracy from the pair so a single optimistic reading cannot turn noise
+  // into movement.
+  const accuracy = Math.max(3, Math.min(25,
+    Math.max(Number(previous.accuracy) || 0, Number(next.accuracy) || 0) || 5));
+  // Keep the threshold below the displacement of a 5 km/h vehicle between
+  // normal fixes, while still requiring repeated coherent readings below.
+  const movementThreshold = Math.max(MIN_CONFIRMED_MOVEMENT_METERS, Math.min(8, accuracy * 0.3));
+  const stationaryRadius = Math.max(MIN_CONFIRMED_MOVEMENT_METERS, Math.min(12, accuracy * 0.8));
   const speed = meters / elapsedSeconds;
   if (meters <= stationaryRadius && speed < 0.8) return { moving: false, confirmed: false, score: 0, meters, speed: 0 };
-  const moving = meters >= movementThreshold && speed >= 0.5 && speed <= MAX_REALISTIC_SPEED;
+  const nativeSpeed = Number(next.nativeSpeed);
+  const previousNativeSpeed = Number(previous.nativeSpeed);
+  const nativeSpeedSaysMoving = Number.isFinite(nativeSpeed) && nativeSpeed >= 0.8
+    && (!Number.isFinite(previousNativeSpeed) || previousNativeSpeed >= 0.8);
+  const nativeSpeedSaysStationary = Number.isFinite(nativeSpeed) && nativeSpeed < 0.8;
+  const moving = meters >= movementThreshold && speed >= 0.5 && speed <= MAX_REALISTIC_SPEED
+    && !nativeSpeedSaysStationary;
   const score = moving ? Math.min(3, Number(evidence) + 1) : 0;
-  return { moving, confirmed: moving && (score >= 2 || speed >= 4), score, meters, speed };
+  // Slow movement needs three coherent fixes. A faster movement is confirmed
+  // after two fixes, keeping turn guidance responsive without trusting GPS
+  // drift while the device is stopped.
+  return { moving, confirmed: moving && (score >= 3 || (score >= 2 && speed >= 4))
+    && (!Number.isFinite(nativeSpeed) || nativeSpeedSaysMoving), score, meters, speed };
 }

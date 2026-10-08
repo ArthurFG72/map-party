@@ -1,6 +1,7 @@
 {
   "name": "map-party-mobile",
   "version": "1.0.0",
+  "type": "module",
   "license": "MIT",
   "private": true,
   "main": "index.js",

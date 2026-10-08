@@ -19,7 +19,9 @@ export default function PartyPanel({
   mode,
   onMode,
   onSelectPoint,
-  onShare
+  onShare,
+  visible,
+  onVisibilityChange
 }) {
   return <aside className="flex max-h-[58%] w-full shrink-0 flex-col overflow-y-auto border-b border-slate-200 bg-white p-4 md:max-h-none md:w-96 md:border-b-0 md:border-r">
     <div className="flex items-center justify-between gap-3">
@@ -27,6 +29,7 @@ export default function PartyPanel({
       <span className={`rounded-full px-2 py-1 text-xs font-medium ${joined ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{joined ? 'Na party' : connected ? 'Entrando' : 'Reconectando'}</span>
     </div>
     <button onClick={onShare} className="mt-4 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-50">Compartilhar party</button>
+    <label className="mt-3 flex items-start gap-2 text-xs text-slate-600"><input type="checkbox" checked={visible} onChange={(event) => onVisibilityChange(event.target.checked)} className="mt-0.5" />Minha posição visível para a party</label>
     <section className="mt-5">
       <h2 className="text-sm font-semibold">Definir rota</h2>
       <p className="mt-1 text-xs text-slate-500">Busque um endereço ou selecione diretamente no mapa.</p>

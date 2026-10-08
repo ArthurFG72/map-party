@@ -1,7 +1,12 @@
 import { CONTRACT_VERSION } from './contracts.js';
 
-const DEFAULT_SERVER_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
-const SERVER_URL = (import.meta.env.VITE_SERVER_URL || DEFAULT_SERVER_URL).replace(/\/$/, '');
+const DEFAULT_SERVER_URL = import.meta.env.DEV
+  ? `${window.location.protocol}//${window.location.hostname}:3001`
+  : window.location.origin;
+const configuredServerUrl = import.meta.env.VITE_SERVER_URL;
+const SERVER_URL = (configuredServerUrl && !(window.location.hostname !== 'localhost' && configuredServerUrl.includes('localhost'))
+  ? configuredServerUrl
+  : DEFAULT_SERVER_URL).replace(/\/$/, '');
 
 async function requestJson(path, options = {}) {
   const controller = new AbortController();
@@ -30,7 +35,7 @@ async function requestJson(path, options = {}) {
 }
 
 export function searchPlaces(query) {
-  const params = new URLSearchParams({ q: query, limit: '5' });
+  const params = new URLSearchParams({ q: query, limit: '12' });
   return requestJson(`/api/geocode?${params}`);
 }
 
@@ -40,4 +45,8 @@ export function fetchRoute(origin, destination) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contractVersion: CONTRACT_VERSION, origin, destination, profile: 'driving' })
   });
+}
+
+export function fetchAppDownloads() {
+  return requestJson('/api/app-downloads');
 }

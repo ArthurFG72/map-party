@@ -6,7 +6,8 @@ function isIosDevice() {
 }
 
 function isStandalone() {
-  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  return (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches)
+    || navigator.standalone === true;
 }
 
 function wasDismissed() {

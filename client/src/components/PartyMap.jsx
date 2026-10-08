@@ -1,6 +1,13 @@
 import L from 'leaflet';
 import { useEffect } from 'react';
-import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+
+const vehicleMarkerIcon = L.icon({
+  iconUrl: '/vehicle-marker.svg',
+  iconSize: [22, 29],
+  iconAnchor: [11, 14],
+  popupAnchor: [0, -14]
+});
 
 function ClickHandler({ mode, onPick }) {
   useMapEvents({ click: (event) => mode && onPick({ lat: event.latlng.lat, lng: event.latlng.lng }) });
@@ -44,12 +51,11 @@ export default function PartyMap({ participants, route, points, focusPoint, sele
     {route?.geometry && <GeoJSON key={route.revision || route.updatedAt} data={route.geometry} style={{ color: '#2563eb', weight: 6, opacity: 0.8 }} />}
     {points.origin && <CircleMarker center={[points.origin.lat, points.origin.lng]} radius={8} pathOptions={{ color: 'white', weight: 3, fillColor: '#16a34a', fillOpacity: 1 }}><Tooltip permanent direction="top">Origem</Tooltip></CircleMarker>}
     {points.destination && <CircleMarker center={[points.destination.lat, points.destination.lng]} radius={8} pathOptions={{ color: 'white', weight: 3, fillColor: '#dc2626', fillOpacity: 1 }}><Tooltip permanent direction="top">Destino</Tooltip></CircleMarker>}
-    {participants.filter((item) => item.location).map((item) => <CircleMarker
-      key={item.id} center={[item.location.lat, item.location.lng]} radius={10}
-      pathOptions={{ color: 'white', weight: 3, fillColor: item.color, fillOpacity: 1 }}
+    {participants.filter((item) => item.location).map((item) => <Marker
+      key={item.id} position={[item.location.lat, item.location.lng]} icon={vehicleMarkerIcon}
     >
-      <Tooltip direction="top" offset={[0, -8]}>{item.name}</Tooltip>
+      <Tooltip direction="bottom" offset={[0, 10]}>{item.name}</Tooltip>
       <Popup><strong>{item.name}</strong><br />Precisão: {Math.round(item.location.accuracy)} m<br />Atualizado {ageLabel(item.location.timestamp)}</Popup>
-    </CircleMarker>)}
+    </Marker>)}
   </MapContainer>;
 }

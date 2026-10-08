@@ -4,6 +4,7 @@ import { createDeviceId, validDeviceId } from './deviceIdentity';
 
 let databasePromise;
 let placeMutationQueue = Promise.resolve();
+let navigationSessionQueue = Promise.resolve();
 let participantTokenPromise;
 let deviceIdPromise;
 
@@ -339,6 +340,23 @@ export function savePartySnapshot(roomId, snapshot) {
 
 export function loadPartySnapshot(roomId) {
   return readState(`party:${roomId}`).catch(() => null);
+}
+
+export function saveNavigationSession(roomId, session) {
+  if (!roomId || !session?.originalOrigin || !session?.originalDestination) return Promise.resolve(false);
+  const key = `navigation-session:${roomId}`;
+  navigationSessionQueue = navigationSessionQueue
+    .catch(() => undefined)
+    .then(() => writeState(key, session));
+  return navigationSessionQueue.then(() => true, () => false);
+}
+
+export function loadNavigationSession(roomId) {
+  if (!roomId) return Promise.resolve(null);
+  return readState(`navigation-session:${roomId}`).then((session) => {
+    if (!session?.originalOrigin || !session?.originalDestination || !session?.activeRoute) return null;
+    return session;
+  }).catch(() => null);
 }
 
 export function savePartyPoints(roomId, points) {

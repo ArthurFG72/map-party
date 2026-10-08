@@ -50,6 +50,7 @@ function emitPartySnapshots(io, store, roomId) {
 
 export function registerSocketHandlers(io, store = new PartyStore(), {
   routeService = createRouteService(),
+  trafficStore = null,
   disconnectGraceMs = 10_000,
   deviceAuth = null,
   requireDeviceAuth = false,
@@ -204,6 +205,7 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
         return;
       }
       if (!allowed(rate.location, LOCATION_RATE)) return reject(ack, 'Muitas atualizações de localização. Aguarde um momento.');
+      trafficStore?.observe(location);
       const previousLocation = participant.location;
       participant.location = location;
       store.setLocationSequence(socket.id, locationSequence);

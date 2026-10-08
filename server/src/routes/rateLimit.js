@@ -1,4 +1,4 @@
-export function createIpRateLimit({ windowMs = 60_000, max = 30, now = () => Date.now() } = {}) {
+export function createIpRateLimit({ windowMs = 60_000, max = 30, maxBuckets = 10_000, now = () => Date.now() } = {}) {
   const buckets = new Map();
   let requestCount = 0;
   return (req, res, next) => {
@@ -18,6 +18,7 @@ export function createIpRateLimit({ windowMs = 60_000, max = 30, now = () => Dat
       return res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Muitas requisições. Tente novamente em instantes.' } });
     }
     hits.push(timestamp);
+    if (!buckets.has(key) && buckets.size >= maxBuckets) buckets.delete(buckets.keys().next().value);
     buckets.set(key, hits);
     return next();
   };
