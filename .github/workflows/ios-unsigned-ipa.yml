@@ -68,6 +68,44 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Collect complete failure diagnostics
+        if: failure()
+        working-directory: mobile
+        shell: bash
+        run: |
+          {
+            echo '### Complete iOS failure diagnostics'
+            echo "commit: $GITHUB_SHA"
+            echo "runner: $RUNNER_OS / $ImageOS"
+            echo '--- toolchain ---'
+            xcodebuild -version || true
+            node --version || true
+            npm --version || true
+            echo '--- project files ---'
+            find ios -maxdepth 2 -type f \( -name '*.log' -o -name 'Podfile' -o -name 'Podfile.lock' \) -print 2>/dev/null || true
+            echo '--- compiler diagnostics ---'
+            if [ -f ios/xcodebuild.log ]; then
+              grep -n -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | head -n 160 || true
+              echo '--- xcode log tail ---'
+              tail -n 160 ios/xcodebuild.log || true
+            else
+              echo 'xcodebuild.log was not created'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload complete iOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-party-ios-diagnostics
+          path: |
+            mobile/ios/xcodebuild.log
+            mobile/ios/**/*.log
+            mobile/ios/**/Podfile
+            mobile/ios/**/Podfile.lock
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Expose native Xcode failure summary
         if: failure()
         working-directory: mobile
