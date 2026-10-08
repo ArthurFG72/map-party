@@ -21,6 +21,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Collect runner diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '### iOS runner diagnostics'
+            echo "commit: $GITHUB_SHA"
+            echo "run_id: $GITHUB_RUN_ID"
+            echo "run_attempt: $GITHUB_RUN_ATTEMPT"
+            echo "runner_name: ${RUNNER_NAME:-<not-assigned>}"
+            echo "runner_os: ${RUNNER_OS:-<unknown>}"
+            echo "image_os: ${ImageOS:-<unknown>}"
+            echo "image_version: ${ImageVersion:-<unknown>}"
+            echo '--- host ---'
+            sw_vers
+            uname -a
+            df -h .
+            echo '--- toolchain ---'
+            xcodebuild -version
+            swift --version
+            node --version
+            npm --version
+            echo '--- project ---'
+            git status --short
+            git rev-parse HEAD
+            find mobile -maxdepth 2 -type f \( -name 'package.json' -o -name 'app.json' -o -name 'app.config.js' \) -print
+          } > ios-runner-diagnostics.txt 2>&1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -80,6 +109,15 @@ jobs:
           path: mobile/ios/xcodebuild.log
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Upload runner diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-party-ios-runner-diagnostics
+          path: ios-runner-diagnostics.txt
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Collect complete failure diagnostics
         if: failure()
