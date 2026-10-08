@@ -73,7 +73,13 @@ jobs:
         working-directory: mobile
         shell: bash
         run: |
-          matches="$(grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | tail -n 120 || true)"
+          matches="$(
+            {
+              grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | head -n 100 || true
+              echo '--- last matching diagnostics ---'
+              grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | tail -n 40 || true
+            }
+          )"
           {
             echo '### Xcode native build failure (last diagnostics)'
             echo 'The JavaScript bundle and prebuild completed; the failure happened in xcodebuild.'
