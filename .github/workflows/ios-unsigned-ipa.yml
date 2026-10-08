@@ -13,7 +13,9 @@ jobs:
   build-ios-unsigned:
     # ExpoModulesJSI currently requires Swift tools 6.2. Use the Intel
     # macOS 26 image, whose Xcode 26 toolchain provides that Swift version.
-    runs-on: macos-26-intel
+    # Use the standard Apple Silicon pool; the Intel pool can be unavailable
+    # on free/private repositories even when the label is valid.
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
