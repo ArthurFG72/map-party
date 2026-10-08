@@ -68,6 +68,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Expose native Xcode failure summary
+        if: failure()
+        working-directory: mobile
+        shell: bash
+        run: |
+          {
+            echo '### Xcode native build failure (last diagnostics)'
+            echo 'The JavaScript bundle and prebuild completed; the failure happened in xcodebuild.'
+            echo '```text'
+            grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | tail -n 120 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package unsigned IPA
         working-directory: mobile
         shell: bash
