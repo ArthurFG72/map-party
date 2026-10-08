@@ -7,6 +7,7 @@ import { createSealedEmergencyPacket } from '../emergencyPacket';
 import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
 import { buildNavigationGuidance, distanceMeters } from '../navigationGuidance';
+import { classifyMovement } from '../locationStabilization';
 import { CONNECTION_STATE, NAVIGATION_STATE, createNavigationState, transitionNavigation } from '../navigationState';
 import { executeNavigationCommand } from '../navigationCommandExecutor';
 import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from '../navigationVoice';
@@ -347,6 +348,7 @@ export default function PartyScreen({ session, onLeave }) {
   const navigationTraceRef = useRef([]);
   const navigationBaselinePendingRef = useRef(false);
   const navigationBaselineTimestampRef = useRef(0);
+  const movementEvidenceRef = useRef({ score: 0, pendingMeters: 0 });
   const temporaryStopResumeRef = useRef(false);
   const offlinePackageRequestRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
@@ -755,13 +757,19 @@ export default function PartyScreen({ session, onLeave }) {
     const previousTraveledPosition = baselinePending ? null : lastTraveledPositionRef.current;
     if (!previousTraveledPosition || location.position.timestamp > previousTraveledPosition.timestamp) {
       if (previousTraveledPosition) {
-        const segmentMeters = distanceMeters(previousTraveledPosition, location.position);
-        const elapsedSeconds = Math.max(0.1, (location.position.timestamp - previousTraveledPosition.timestamp) / 1000);
-        const measuredSpeed = segmentMeters / elapsedSeconds;
-        setDisplaySpeedKmh(segmentMeters >= 8 && measuredSpeed >= 1.5 ? Math.min(90, measuredSpeed * 3.6) : 0);
-        // Ignore impossible GPS jumps; they must never inflate the trip total.
-        if (Number.isFinite(segmentMeters) && segmentMeters >= 1 && segmentMeters / elapsedSeconds <= 100) {
-          const nextTraveledMeters = traveledMetersRef.current + segmentMeters;
+        const movement = classifyMovement(previousTraveledPosition, location.position, movementEvidenceRef.current.score);
+        if (!movement.moving) movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
+        else movementEvidenceRef.current = {
+          score: movement.score,
+          pendingMeters: movementEvidenceRef.current.pendingMeters + movement.meters
+        };
+        setDisplaySpeedKmh(movement.confirmed ? Math.min(90, movement.speed * 3.6) : 0);
+        // Require two coherent fixes for slow movement. A single GPS drift
+        // never becomes speed or trip distance, while real low-speed motion
+        // is accepted without the old fixed 8 m (~29 km/h) threshold.
+        if (movement.confirmed) {
+          const nextTraveledMeters = traveledMetersRef.current + movementEvidenceRef.current.pendingMeters;
+          movementEvidenceRef.current.pendingMeters = 0;
           traveledMetersRef.current = nextTraveledMeters;
           setTraveledMeters(nextTraveledMeters);
         }
@@ -831,6 +839,7 @@ export default function PartyScreen({ session, onLeave }) {
       setNavigationLocked(false);
       setNavigationGuidance(null);
       lastTraveledPositionRef.current = null;
+      movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
       setRouteDisplayEnabled(false);
       setLocalRoute(null);
       // Keep the completed route available so the next action can return to
@@ -1388,6 +1397,7 @@ export default function PartyScreen({ session, onLeave }) {
     navigationBaselinePendingRef.current = true;
     navigationBaselineTimestampRef.current = Number(currentPosition.timestamp) || Date.now();
     lastTraveledPositionRef.current = currentPosition;
+    movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
     setTemporaryStopArmed(false);
     setNavigationLocked(false);
     setNavigationGuidance(buildNavigationGuidance(routeToStart, currentPosition));
@@ -1525,6 +1535,7 @@ export default function PartyScreen({ session, onLeave }) {
       navigationStartedAtRef.current = Date.now();
       navigationTraceRef.current = [current];
       lastTraveledPositionRef.current = current;
+      movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
       setTemporaryStopArmed(false);
       transitionNavigationState({ type: 'navigation.start' });
       setMessage('Rota de volta iniciada.');

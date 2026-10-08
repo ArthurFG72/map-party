@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocationUpdate } from '../src/locationUpdate.js';
-import { stabilizePosition } from '../src/locationStabilization.js';
+import { classifyMovement, stabilizePosition } from '../src/locationStabilization.js';
 
 test('usa o contrato de localização que o servidor valida no primeiro nível', () => {
   const update = createLocationUpdate({ lat: -23.55, lng: -46.63, accuracy: 8, timestamp: 123 }, 456);
@@ -83,4 +83,27 @@ test('não reaproveita velocidade antiga quando o deslocamento medido é menor',
   );
   assert.notEqual(stable, null);
   assert.ok(stable.speed < 3, `speed calculado: ${stable.speed}`);
+});
+
+test('aceita movimento lento depois de duas leituras coerentes', () => {
+  const first = { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000 };
+  const second = { lat: -23.549982, lng: -46.63, accuracy: 5, timestamp: 3_000 };
+  const third = { lat: -23.549964, lng: -46.63, accuracy: 5, timestamp: 5_000 };
+  const one = classifyMovement(first, second, 0);
+  const two = classifyMovement(second, third, one.score);
+  assert.equal(one.moving, true);
+  assert.equal(one.confirmed, false);
+  assert.equal(two.confirmed, true);
+  assert.ok(two.speed > 0.5 && two.speed < 2);
+});
+
+test('não transforma uma deriva lenta isolada em velocidade', () => {
+  const stable = classifyMovement(
+    { lat: -23.55, lng: -46.63, accuracy: 5, timestamp: 1_000 },
+    { lat: -23.549982, lng: -46.63, accuracy: 5, timestamp: 5_000 },
+    0
+  );
+  assert.equal(stable.moving, false);
+  assert.equal(stable.confirmed, false);
+  assert.equal(stable.speed, 0);
 });

@@ -46,3 +46,18 @@ export function stabilizePosition(previous, next) {
   // duas posições aceitas. A posição continua sendo a fonte de verdade.
   return { ...next, speed: Math.min(MAX_REALISTIC_SPEED, Math.max(0, measuredSpeed)) };
 }
+
+export function classifyMovement(previous, next, evidence = 0) {
+  if (!previous || !next || !Number.isFinite(previous.timestamp) || !Number.isFinite(next.timestamp)
+    || next.timestamp <= previous.timestamp) return { moving: false, confirmed: false, score: 0, meters: 0, speed: 0 };
+  const elapsedSeconds = Math.max(0.1, (next.timestamp - previous.timestamp) / 1000);
+  const meters = distanceMeters(previous, next);
+  const accuracy = Math.max(1, Math.min(20, Number(previous.accuracy) || Number(next.accuracy) || 5));
+  const movementThreshold = Math.max(1.5, Math.min(6, accuracy * 0.4));
+  const stationaryRadius = Math.max(3, Math.min(10, accuracy * 0.6));
+  const speed = meters / elapsedSeconds;
+  if (meters <= stationaryRadius && speed < 0.8) return { moving: false, confirmed: false, score: 0, meters, speed: 0 };
+  const moving = meters >= movementThreshold && speed >= 0.5 && speed <= MAX_REALISTIC_SPEED;
+  const score = moving ? Math.min(3, Number(evidence) + 1) : 0;
+  return { moving, confirmed: moving && (score >= 2 || speed >= 4), score, meters, speed };
+}
