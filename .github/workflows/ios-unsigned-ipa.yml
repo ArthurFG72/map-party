@@ -55,6 +55,10 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath ios/build-unsigned \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee ios/xcodebuild.log
