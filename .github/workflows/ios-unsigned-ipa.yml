@@ -73,13 +73,17 @@ jobs:
         working-directory: mobile
         shell: bash
         run: |
+          matches="$(grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | tail -n 120 || true)"
           {
             echo '### Xcode native build failure (last diagnostics)'
             echo 'The JavaScript bundle and prebuild completed; the failure happened in xcodebuild.'
             echo '```text'
-            grep -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | tail -n 120 || true
+            printf '%s\n' "$matches"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=Xcode diagnostic::$line"
+          done <<< "$matches"
 
       - name: Package unsigned IPA
         working-directory: mobile
