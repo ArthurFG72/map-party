@@ -11,8 +11,9 @@ on:
 
 jobs:
   build-ios-unsigned:
-    # Use the stable Intel runner supported by the hosted macOS fleet.
-    runs-on: macos-15-intel
+    # ExpoModulesJSI currently requires Swift tools 6.2. Use the Intel
+    # macOS 26 image, whose Xcode 26 toolchain provides that Swift version.
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -29,7 +30,13 @@ jobs:
 
       - name: Select compatible Xcode toolchain
         run: |
-          if [ -d /Applications/Xcode_16.4.app ]; then
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          elif [ -d /Applications/Xcode_26.5.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          elif [ -d /Applications/Xcode_26.4.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.4.1.app/Contents/Developer
+          elif [ -d /Applications/Xcode_16.4.app ]; then
             sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
           elif [ -d /Applications/Xcode_16.3.app ]; then
             sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
