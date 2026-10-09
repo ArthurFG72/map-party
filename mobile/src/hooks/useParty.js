@@ -37,7 +37,8 @@ function compactLocation(location) {
 }
 function projectLocation(location, now) {
   if (!location) return location;
-  const ageMs = Math.max(0, now - Number(location.timestamp || now));
+  const freshnessTimestamp = Number(location.serverReceivedAt || location.timestamp || now);
+  const ageMs = Math.max(0, now - freshnessTimestamp);
   // Never invent movement from a stale fix. The last real coordinate is kept
   // visible and explicitly marked stale until a new GPS fix arrives.
   return { ...location, estimated: ageMs >= 10_000, stale: ageMs > LOCATION_DISPLAY_MAX_AGE_MS, ageMs };
@@ -77,6 +78,7 @@ export function useParty(roomId, name, visible = true) {
   const localTransportRef = useRef(null);
   const pendingSosRef = useRef(new Map());
   const lastSentLocationRef = useRef(null);
+  const lastObservedLocationRef = useRef(null);
   const [sosDelivery, setSosDelivery] = useState(null);
   const [incomingSos, setIncomingSos] = useState(null);
   const [incomingDirectMessage, setIncomingDirectMessage] = useState(null);
@@ -172,6 +174,29 @@ export function useParty(roomId, name, visible = true) {
     const localTransport = createLocalTransport({ roomId, participantId: name, onVerification: (event) => {
       if (event?.endpointId) localTransportRef.current?.verifyConnection(event.endpointId, true).catch(() => undefined);
     }, onMessage: (message) => {
+      if (message?.type === 'direct-message' && message.messageId
+        && message.targetParticipantId === participantIdRef.current && message.text) {
+        setIncomingDirectMessage({
+          messageId: message.messageId,
+          senderParticipantId: message.senderParticipantId || message.participantId,
+          senderName: message.senderName || 'Participante próximo',
+          text: String(message.text).slice(0, 500),
+          local: true
+        });
+        return;
+      }
+      if (message?.type === 'route-share' && message.invitationId
+        && message.targetParticipantId === participantIdRef.current && message.route) {
+        setIncomingRouteShareInvitation({
+          invitationId: message.invitationId,
+          participantId: message.senderParticipantId,
+          participantName: message.senderName || 'Participante próximo',
+          destination: message.route.destination,
+          route: message.route,
+          offline: true
+        });
+        return;
+      }
       if (message?.type === 'sos-ack' && message.ackFor && pendingSosRef.current.has(message.ackFor)) {
         const current = pendingSosRef.current.get(message.ackFor);
         const next = new Set(current);
@@ -331,18 +356,19 @@ export function useParty(roomId, name, visible = true) {
     };
   }, [name, roomId, socket]);
 
-  const sendLocation = useCallback((location) => {
+  const sendLocation = useCallback((location, { forceBroadcast = false } = {}) => {
     if (!locationSharingEnabledRef.current) return;
     if (!visibleRef.current) return;
     const compact = compactLocation(location);
+    lastObservedLocationRef.current = compact;
     const previous = lastSentLocationRef.current;
     const elapsed = previous ? compact.timestamp - previous.timestamp : Number.POSITIVE_INFINITY;
     const moved = previous ? locationDistanceMeters(previous, compact) : Number.POSITIVE_INFINITY;
     const locationInterval = connectivity.capabilities.locationIntervalMs;
-    if (previous && elapsed < locationInterval && moved < LOCATION_MIN_MOVEMENT_METERS) return;
+    if (!forceBroadcast && previous && elapsed < locationInterval && moved < LOCATION_MIN_MOVEMENT_METERS) return;
     lastSentLocationRef.current = compact;
     locationSequenceRef.current = Math.max(locationSequenceRef.current + 1, Date.now());
-    const update = createLocationUpdate(compact, locationSequenceRef.current);
+    const update = createLocationUpdate(compact, locationSequenceRef.current, { forceBroadcast });
     localTransportRef.current?.send({ type: 'location', participantId: participantIdRef.current, location: compact });
     if (!socket.connected || !joinedRef.current) {
       savePendingLocation(roomId, update);
@@ -356,6 +382,14 @@ export function useParty(roomId, name, visible = true) {
       }
     });
   }, [connectivity.capabilities.locationIntervalMs, roomId, socket]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const latest = lastObservedLocationRef.current;
+      if (latest) sendLocation(latest);
+    }, LOCATION_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [sendLocation]);
 
   const publishRoute = useCallback((nextRoute, scope = 'personal') => new Promise((resolve, reject) => {
     if (!socket.connected || !joinedRef.current) return reject(new Error('Sem conexão. A rota anterior permanece disponível e será recalculada quando a internet voltar.'));
@@ -412,17 +446,44 @@ export function useParty(roomId, name, visible = true) {
     });
   }), [socket]);
 
-  const requestRouteShare = useCallback((targetParticipantIds) => new Promise((resolve, reject) => {
+  const requestRouteShare = useCallback((targetParticipantIds, routeOverride = null) => new Promise((resolve, reject) => {
     const ids = [...new Set((targetParticipantIds || []).filter(Boolean))];
-    if (!ids.length || !socket.connected || !joinedRef.current) return reject(new Error('Selecione pelo menos um participante conectado.'));
+    if (!ids.length) return reject(new Error('Selecione pelo menos um participante conectado.'));
+    if (!socket.connected || !joinedRef.current) {
+      const localRoute = routeOverride || personalRoute || route || sharedRoute;
+      if (!localRoute?.geometry?.coordinates?.length) return reject(new Error('A rota local não está disponível para compartilhamento.'));
+      if (!localTransportRef.current) return reject(new Error('Transporte local indisponível neste build.'));
+      const invitationBase = `offline-route-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      Promise.all(ids.map((targetParticipantId) => localTransportRef.current?.send({
+        type: 'route-share',
+        invitationId: `${invitationBase}-${targetParticipantId}`,
+        senderParticipantId: participantIdRef.current,
+        senderName: name,
+        targetParticipantId,
+        route: localRoute
+      }))).then(() => resolve({ ok: true, local: true, invited: ids })).catch(reject);
+      return;
+    }
     socket.timeout(5_000).emit('request-route-share', { targetParticipantIds: ids }, (timeoutError, reply) => {
       if (timeoutError) return reject(new Error('O servidor não confirmou o convite de rota.'));
       if (!reply?.ok) return reject(new Error(reply?.error || 'Não foi possível compartilhar a rota.'));
       resolve(reply);
     });
-  }), [socket]);
+  }), [name, personalRoute, route, sharedRoute, socket]);
 
   const respondRouteShareInvitation = useCallback((invitationId, accepted) => new Promise((resolve, reject) => {
+    const invitation = incomingRouteShareInvitation;
+    if (invitation?.offline && invitation.invitationId === invitationId) {
+      setIncomingRouteShareInvitation(null);
+      Promise.resolve(localTransportRef.current?.send({
+        type: 'route-share-response',
+        responseTo: invitationId,
+        senderParticipantId: participantIdRef.current,
+        targetParticipantId: invitation.participantId,
+        accepted: Boolean(accepted)
+      })).catch(() => undefined);
+      return resolve({ ok: true, local: true, route: accepted ? invitation.route : null });
+    }
     if (!invitationId || !socket.connected || !joinedRef.current) return reject(new Error('Convite indisponível.'));
     socket.timeout(5_000).emit('respond-route-share', { invitationId, accepted: Boolean(accepted) }, (timeoutError, reply) => {
       setIncomingRouteShareInvitation(null);
@@ -430,7 +491,7 @@ export function useParty(roomId, name, visible = true) {
       if (!reply?.ok) return reject(new Error(reply?.error || 'Não foi possível responder ao convite.'));
       resolve(reply);
     });
-  }), [socket]);
+  }), [incomingRouteShareInvitation, socket]);
 
   const clearPersonalRoute = useCallback(() => setPersonalRoute(null), []);
 
@@ -475,13 +536,23 @@ export function useParty(roomId, name, visible = true) {
   const sendDirectMessage = useCallback((targetParticipantId, text) => new Promise((resolve, reject) => {
     const message = String(text || '').trim().slice(0, 500);
     if (!targetParticipantId || !message) return reject(new Error('Informe uma mensagem.'));
-    if (!socket.connected || !joinedRef.current) return reject(new Error('Sem conexao com a party.'));
+    if (!socket.connected || !joinedRef.current) {
+      Promise.resolve(localTransportRef.current?.send({
+        type: 'direct-message',
+        messageId: `dm-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        senderParticipantId: participantIdRef.current,
+        senderName: name,
+        targetParticipantId,
+        text: message
+      })).then(() => resolve({ ok: true, local: true, queued: true })).catch(reject);
+      return;
+    }
     socket.timeout(5_000).emit('send-direct-message', { targetParticipantId, text: message }, (timeoutError, reply) => {
       if (timeoutError) return reject(new Error('O servidor nao confirmou a mensagem.'));
       if (!reply?.ok) return reject(new Error(reply?.error || 'Nao foi possivel enviar a mensagem.'));
       resolve(reply);
     });
-  }), [socket]);
+  }), [name, socket]);
 
   const reportNavigationCommandResult = useCallback((result) => {
     if (!result?.request_id || !socket.connected || !joinedRef.current) return;

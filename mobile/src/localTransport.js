@@ -1,4 +1,8 @@
 export const MAX_QUEUE = 20;
+export const MAX_ENVELOPE_BYTES = 16 * 1024;
+export const MAX_TTL_MS = 180_000;
+export const MAX_HOPS = 3;
+const MAX_SEEN = 512;
 const SERVICE_ID = 'com.arthur.mapparty.offline';
 const VERIFICATION_EVENTS = new Set([
   'verificationRequired',
@@ -25,17 +29,59 @@ function queueKey(item) {
     : item.type || 'message';
 }
 
+function byteLength(value) {
+  try {
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(value).length;
+  } catch { /* Use the conservative fallback below. */ }
+  return unescape(encodeURIComponent(value)).length;
+}
+
+function envelope(message, roomId) {
+  const now = Date.now();
+  const createdAt = Number.isFinite(Number(message.createdAt)) ? Number(message.createdAt) : now;
+  const expiresAt = Math.min(
+    Number.isFinite(Number(message.expiresAt)) ? Number(message.expiresAt) : now + MAX_TTL_MS,
+    createdAt + MAX_TTL_MS
+  );
+  const item = {
+    roomId,
+    ...message,
+    messageId: typeof message.messageId === 'string' && message.messageId.trim()
+      ? message.messageId.trim().slice(0, 96)
+      : `local-${now}-${Math.random().toString(36).slice(2, 10)}`,
+    createdAt,
+    expiresAt,
+    hops: Math.min(Math.max(Number(message.hops) || 0, 0), MAX_HOPS)
+  };
+  if (byteLength(JSON.stringify(item)) > MAX_ENVELOPE_BYTES) return null;
+  return item;
+}
+
 export function createLocalTransport({ roomId, participantId, onMessage, onVerification, onStatus, onEvent } = {}) {
   let bridge = nativeBridge();
   let running = false;
   let unsubscribe;
   const queue = [];
+  const seen = new Set();
+  const seenOrder = [];
+
+  function remember(messageId) {
+    if (!messageId) return true;
+    if (seen.has(messageId)) return false;
+    seen.add(messageId);
+    seenOrder.push(messageId);
+    while (seenOrder.length > MAX_SEEN) seen.delete(seenOrder.shift());
+    return true;
+  }
 
   function receive(message) {
     if (!message || typeof message !== 'object') return;
     if (message.message && typeof message.message === 'object') return receive(message.message);
     if (message.roomId !== roomId) return;
     if (message.type === 'message' && message.payload && typeof message.payload === 'object') return receive(message.payload);
+    if (message.expiresAt != null && Number(message.expiresAt) <= Date.now()) return;
+    if (message.hops != null && (Number(message.hops) < 0 || Number(message.hops) > MAX_HOPS)) return;
+    if (!remember(message.messageId)) return;
     onMessage?.(message);
   }
 
@@ -47,7 +93,12 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
     onEvent?.(event);
     const type = typeof event.type === 'string' ? event.type : '';
     if (VERIFICATION_EVENTS.has(type)) return onVerification?.(event);
-    if (type === 'status' || type === 'connected' || type === 'disconnected') return onStatus?.(event.status || type, event);
+    if (type === 'status' || type === 'connected' || type === 'disconnected') {
+      onStatus?.(event.status || type, event);
+      if (type === 'started' || type === 'connected' || event.status === 'connected') flushQueue();
+      return;
+    }
+    if (type === 'started') { onStatus?.('started', event); flushQueue(); return; }
     if (type === 'message' || type === 'data' || event.roomId || event.message) receive(event);
   }
 
@@ -99,9 +150,13 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
   async function send(message) {
     if (!message || typeof message !== 'object') return false;
     if (message.roomId && message.roomId !== roomId) return false;
-    const item = { roomId, ...message };
+    const item = envelope(message, roomId);
+    if (!item) return false;
     if (bridge && running && typeof bridge.send === 'function') {
-      try { await bridge.send(item); return true; } catch { /* Keep it for reconnection. */ }
+      try {
+        const delivered = await bridge.send(item);
+        if (delivered !== false) return true;
+      } catch { /* Keep it for reconnection. */ }
     }
     const queued = { ...item, queuedAt: Date.now() };
     const key = queueKey(queued);

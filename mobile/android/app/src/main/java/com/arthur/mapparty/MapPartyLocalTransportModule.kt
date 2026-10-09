@@ -30,6 +30,8 @@ import com.google.android.gms.nearby.connection.Strategy
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.LinkedHashSet
+import java.util.UUID
 
 class MapPartyLocalTransportModule(
   private val context: ReactApplicationContext
@@ -38,6 +40,10 @@ class MapPartyLocalTransportModule(
     private const val NAME = "MapPartyLocalTransport"
     private const val SERVICE_ID = "com.arthur.mapparty.offline"
     private const val PERMISSION_REQUEST = 7401
+    private const val MAX_ENVELOPE_BYTES = 16 * 1024
+    private const val MAX_TTL_MS = 180_000L
+    private const val MAX_HOPS = 3
+    private const val MAX_SEEN = 512
     private val STRATEGY = Strategy.P2P_CLUSTER
   }
 
@@ -48,6 +54,7 @@ class MapPartyLocalTransportModule(
   private var participantId = ""
   private var running = false
   private var permissionPromise: Promise? = null
+  private val seen = LinkedHashSet<String>()
 
   init { context.addActivityEventListener(this) }
 
@@ -93,7 +100,21 @@ class MapPartyLocalTransportModule(
   private val payloadCallback = object : PayloadCallback() {
     override fun onPayloadReceived(endpointId: String, payload: Payload) {
       val bytes = payload.asBytes() ?: return
-      emit("message", mapOf("json" to String(bytes, Charsets.UTF_8), "endpointId" to endpointId))
+      if (bytes.size > MAX_ENVELOPE_BYTES) return
+      val json = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }.getOrNull() ?: return
+      if (!validEnvelope(json)) return
+      val messageId = json.optString("messageId")
+      synchronized(seen) {
+        if (!seen.add(messageId)) return
+        while (seen.size > MAX_SEEN) seen.remove(seen.first())
+      }
+      emit("message", mapOf("json" to json.toString(), "endpointId" to endpointId))
+      val hops = json.optInt("hops", 0)
+      if (hops < MAX_HOPS && connected.size > 1) {
+        json.put("hops", hops + 1)
+        val relay = Payload.fromBytes(json.toString().toByteArray(Charsets.UTF_8))
+        connected.filter { it != endpointId }.let { peers -> if (peers.isNotEmpty()) client.sendPayload(peers, relay) }
+      }
     }
 
     override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) = Unit
@@ -140,6 +161,7 @@ class MapPartyLocalTransportModule(
     participantId = if (options.hasKey("participantId")) options.getString("participantId") ?: "participant" else "participant"
     if (roomId.isEmpty() || !hasPermissions()) { emit("permissionsRequired"); promise?.resolve(false); return }
     stopInternal()
+    synchronized(seen) { seen.clear() }
     running = true
     val advertising = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
     val discovery = DiscoveryOptions.Builder().setStrategy(STRATEGY).build()
@@ -158,17 +180,34 @@ class MapPartyLocalTransportModule(
     client.stopAdvertising()
     client.stopDiscovery()
     connected.forEach { client.disconnectFromEndpoint(it) }
-    connected.clear(); pending.clear(); running = false
+    connected.clear(); pending.clear(); synchronized(seen) { seen.clear() }; running = false
   }
 
   @ReactMethod
   fun send(message: ReadableMap, promise: Promise?) {
     if (!running || connected.isEmpty()) { promise?.resolve(false); return }
-    val json = toJson(message).toString().toByteArray(Charsets.UTF_8)
+    val objectToSend = toJson(message)
+    val now = System.currentTimeMillis()
+    objectToSend.put("roomId", roomId)
+    if (!objectToSend.has("messageId") || objectToSend.optString("messageId").isBlank()) objectToSend.put("messageId", "local-${now}-${UUID.randomUUID()}")
+    if (!objectToSend.has("createdAt")) objectToSend.put("createdAt", now)
+    objectToSend.put("expiresAt", minOf(objectToSend.optLong("expiresAt", now + MAX_TTL_MS), now + MAX_TTL_MS))
+    objectToSend.put("hops", objectToSend.optInt("hops", 0).coerceIn(0, MAX_HOPS))
+    val json = objectToSend.toString().toByteArray(Charsets.UTF_8)
+    if (json.size > MAX_ENVELOPE_BYTES) { promise?.resolve(false); return }
     val payload = Payload.fromBytes(json)
     client.sendPayload(connected.toList(), payload)
       .addOnSuccessListener { promise?.resolve(true) }
       .addOnFailureListener { promise?.resolve(false) }
+  }
+
+  private fun validEnvelope(json: JSONObject): Boolean {
+    if (json.optString("roomId") != roomId) return false
+    val messageId = json.optString("messageId")
+    if (messageId.isBlank() || messageId.length > 96) return false
+    val expiresAt = json.optLong("expiresAt", 0L)
+    val hops = json.optInt("hops", -1)
+    return expiresAt > System.currentTimeMillis() && hops in 0..MAX_HOPS
   }
 
   @ReactMethod

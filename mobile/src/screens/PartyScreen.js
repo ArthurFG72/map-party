@@ -795,6 +795,20 @@ export default function PartyScreen({ session, onLeave }) {
   }, [location.position, party.route, navigationActive, navigationGuidance?.precisionMode, navigationGuidance?.maneuverPoint?.lat, navigationGuidance?.maneuverPoint?.lng]);
 
   useEffect(() => {
+    if (!navigationActive) {
+      setDisplaySpeedKmh(0);
+      return undefined;
+    }
+    const refreshSpeed = () => {
+      const timestamp = Number(location.position?.timestamp);
+      if (!Number.isFinite(timestamp) || Date.now() - timestamp > 4_000) setDisplaySpeedKmh(0);
+    };
+    refreshSpeed();
+    const timer = setInterval(refreshSpeed, 1_000);
+    return () => clearInterval(timer);
+  }, [navigationActive, location.position?.timestamp]);
+
+  useEffect(() => {
     if (!navigationActive || !location.position || !navigationRoute?.destination) return;
     const lastTracePoint = navigationTraceRef.current.at(-1);
     if (!lastTracePoint || location.position.timestamp > lastTracePoint.timestamp) {
@@ -1767,6 +1781,7 @@ export default function PartyScreen({ session, onLeave }) {
     setRecalculating(true);
     setMessage(automatic ? 'Você saiu da rota. Recalculando automaticamente…' : 'Recalculando rota…');
     try {
+      party.sendLocation(location.position, { forceBroadcast: true });
       const calculatedRoute = await party.publishRoute({
         profile: navigationRoute?.profile || routeProfile,
         origin,
@@ -1821,7 +1836,7 @@ export default function PartyScreen({ session, onLeave }) {
 
   async function confirmRouteShare() {
     try {
-      const reply = await party.requestRouteShare([...routeShareSelection]);
+      const reply = await party.requestRouteShare([...routeShareSelection], navigationRoute);
       setRouteSharePickerVisible(false);
       setRouteShareSelection(new Set());
       setMessage(`Convite de rota enviado para ${reply.invited?.length || 0} participante(s).`);
