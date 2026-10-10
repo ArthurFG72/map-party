@@ -38,6 +38,12 @@ As correções mantêm o GPS e o transporte local:
 
 `npm test -w mobile` valida contratos e regressões JavaScript. A permissão real, a apresentação das folhas de sistema e a ausência de encerramento ainda exigem instalar e executar um build assinado em iPhone físico; o build unsigned não comprova esse comportamento. Se o app ainda fechar, recolher o relatório `.ips` antes de atribuir a causa ao Nearby.
 
+## Falha de runner antes do Xcode (10/10/2026)
+
+O run [38095355398](https://github.com/ArthurFG72/map-party/actions/runs/38095355398), no commit `5f4d43b238f0f72f66ca50174d745683483eef4c`, terminou antes de iniciar um runner. A anotação do GitHub apontou limite de gastos/pagamento da conta; nenhuma etapa do projeto, teste, prebuild ou Xcode foi executada e nenhum artefato foi criado. Portanto, esse run não indica falha no código iOS.
+
+O diagnóstico `scripts/diagnose-ios-workflow.ps1` detecta esse estado pela ausência de runner e orienta verificar Actions/Billing. O repositório `ArthurFG72/map-party` foi tornado público para a compilação macOS solicitada; os próximos builds devem ser disparados nesse repositório. Quando um runner iniciar, o workflow anexa o log integral `xcodebuild.log`, os logs de prebuild, o resumo das linhas de erro Swift/Xcode e os diagnósticos do runner como artefatos, mesmo se a compilação falhar.
+
 ## Build validado
 
 **Critério de sucesso:** o workflow produz apenas o IPA unsigned solicitado. Build e empacotamento não significam instalação ou validação funcional no iPhone. Não assine o artefato nem adicione credenciais Apple sem solicitação explícita. Um iPhone convencional exige app assinado e perfil de provisionamento para instalar/executar; portanto não prometa instalação direta sem assinatura. Não altere `CODE_SIGNING_ALLOWED=NO` para resolver prompts de instalação. A assinatura de distribuição permanece reservada para depois da aprovação total.
