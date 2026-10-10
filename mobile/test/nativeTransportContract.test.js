@@ -76,7 +76,9 @@ test('native Android and iOS location producers expose authenticated recovery up
     assert.match(source, /pending/);
   }
   assert.match(ios, /URLSessionConfiguration\.background/);
-  assert.match(ios, /uploadTask\(with: request, from: pending\)/);
+  assert.match(ios, /stageBackgroundUpload\(pending, sequence: sequence\.stringValue\)/);
+  assert.match(ios, /uploadTask\(with: request, fromFile: uploadFile\)/);
+  assert.doesNotMatch(ios, /uploadTask\(with: request, from: pending\)/);
   assert.match(ios, /"lat": coordinate\.latitude/);
   assert.match(ios, /"lng": coordinate\.longitude/);
   assert.match(ios, /"latitude": coordinate\.latitude/);

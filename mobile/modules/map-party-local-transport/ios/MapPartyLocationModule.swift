@@ -188,17 +188,31 @@ public final class MapPartyLocationModule: Module {
   private func dispatchPending(url: URL, deviceId: String, credential: String) {
     let defaults = UserDefaults.standard
     guard let pending = defaults.data(forKey: "mapparty.background.pending") else { return }
+    guard let sequence = (try? JSONSerialization.jsonObject(with: pending) as? [String: Any])?["locationSequence"] as? NSNumber else { return }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.timeoutInterval = 5
-    request.httpBody = pending
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
     request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
-    let sequence = (try? JSONSerialization.jsonObject(with: pending) as? [String: Any])?["locationSequence"] as? NSNumber
-    let task = uploadSession.uploadTask(with: request, from: pending)
-    task.taskDescription = sequence?.stringValue
+    guard let uploadFile = stageBackgroundUpload(pending, sequence: sequence.stringValue) else { return }
+    let task = uploadSession.uploadTask(with: request, fromFile: uploadFile)
+    task.taskDescription = sequence.stringValue
     task.resume()
+  }
+
+  private func stageBackgroundUpload(_ data: Data, sequence: String) -> URL? {
+    guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+    let directory = caches.appendingPathComponent("MapPartyBackgroundUploads", isDirectory: true)
+    let file = directory.appendingPathComponent("\(sequence).json")
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try data.write(to: file, options: .atomic)
+      return file
+    } catch {
+      sendEvent("onLocationError", ["message": "Não foi possível preparar o envio de localização em segundo plano"])
+      return nil
+    }
   }
 
   private func dispatchPendingIfConfigured() {
@@ -292,10 +306,18 @@ public final class MapPartyLocationModule: Module {
   }
 
   fileprivate func backgroundUploadDidComplete(_ task: URLSessionTask, error: Error?) {
+    let taskSequence = task.taskDescription
+    if let taskSequence,
+       let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+      let file = caches
+        .appendingPathComponent("MapPartyBackgroundUploads", isDirectory: true)
+        .appendingPathComponent("\(taskSequence).json")
+      try? FileManager.default.removeItem(at: file)
+    }
     guard error == nil,
           let response = task.response as? HTTPURLResponse,
           (200...299).contains(response.statusCode),
-          let taskSequence = task.taskDescription,
+          let taskSequence,
           let pending = UserDefaults.standard.data(forKey: "mapparty.background.pending"),
           let object = try? JSONSerialization.jsonObject(with: pending) as? [String: Any],
           String(describing: object["locationSequence"] ?? "") == taskSequence else { return }
