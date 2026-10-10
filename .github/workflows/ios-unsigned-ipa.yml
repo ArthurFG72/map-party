@@ -88,12 +88,13 @@ jobs:
       - name: Validate local CocoaPods specification
         working-directory: mobile
         run: |
-          ruby -r cocoapods -e '
-            spec = Pod::Specification.from_file("modules/map-party-local-transport/ios/MapPartyLocalTransport.podspec")
-            abort "podspec homepage is missing" if spec.homepage.to_s.empty?
-            abort "podspec source is missing" if spec.source.nil? || spec.source.empty?
-            abort "podspec has no source files" if spec.attributes["source_files"].to_s.empty?
-            puts "Validated #{spec.name} #{spec.version}: homepage, source, and source files present"
+          set -o pipefail
+          pod ipc spec modules/map-party-local-transport/ios/MapPartyLocalTransport.podspec | ruby -rjson -e '
+            spec = JSON.parse(STDIN.read)
+            abort "podspec homepage is missing" if spec["homepage"].to_s.empty?
+            abort "podspec source is missing" if !spec["source"].is_a?(Hash) || spec["source"].empty?
+            abort "podspec has no source files" if spec["source_files"].to_s.empty?
+            puts "Validated #{spec["name"]} #{spec["version"]}: homepage, source, and source files present"
           '
 
       - name: Generate iOS project
