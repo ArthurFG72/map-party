@@ -59,8 +59,8 @@ test('iOS local transport links SPM modules into its CocoaPods target and isolat
   assert.match(nearbyPlugin, /transport_target\.package_product_dependencies/);
   assert.match(nearbyPlugin, /transport_target\.frameworks_build_phase\.files/);
   assert.match(nearbyPlugin, /\$\(OBJROOT\)\/NearbyConnections\.build\/\$\(CONFIGURATION\)\$\(EFFECTIVE_PLATFORM_NAME\)/);
-  assert.match(nearby, /didReceive stream: InputStream[\s\S]*cancellationToken token: CancellationToken/);
-  assert.match(nearby, /maxEnvelopeBytes \+ 1 - data\.count/);
+  assert.match(nearby, /didReceive stream: InputStream[\s\S]*cancellationToken token: CancellationToken[\s\S]*stream\.close\(\); connectionManager\.disconnect\(from: endpointID\)/);
+  assert.match(nearby, /didStartReceivingResourceWithID[\s\S]*connectionManager\.disconnect\(from: endpointID\)/);
 });
 
 test('native Android and iOS location producers expose authenticated recovery upload', async () => {
