@@ -6,9 +6,9 @@ const infoPlist = {
   ...appJson.expo.ios?.infoPlist,
   NSLocationAlwaysAndWhenInUseUsageDescription: 'O Map Party mantém sua rota atualizada em segundo plano.',
   NSLocationWhenInUseUsageDescription: 'O Map Party usa sua localização enquanto o app está aberto para mostrá-la aos participantes da party.',
-  NSLocalNetworkUsageDescription: 'O Map Party acessa a rede local para sincronizar a party.',
-  NSBluetoothAlwaysUsageDescription: 'O Map Party usa Bluetooth para retransmitir pedidos SOS próximos.',
-  NSBluetoothPeripheralUsageDescription: 'O Map Party anuncia pedidos SOS para aparelhos próximos.',
+  NSLocalNetworkUsageDescription: 'O Map Party usa a rede local para encontrar e conectar aparelhos próximos da party.',
+  NSBluetoothAlwaysUsageDescription: 'O Map Party usa Bluetooth para encontrar participantes próximos e retransmitir pedidos SOS.',
+  NSBluetoothPeripheralUsageDescription: 'O Map Party anuncia este aparelho para conectar participantes próximos e retransmitir pedidos SOS.',
   NSMicrophoneUsageDescription: 'Permitir o microfone para ouvir comandos de navegação.',
   NSSpeechRecognitionUsageDescription: 'Permitir o reconhecimento de voz para converter comandos em texto.',
   NSSiriUsageDescription: 'Permitir que a Siri execute comandos de navegação do Map Party.'

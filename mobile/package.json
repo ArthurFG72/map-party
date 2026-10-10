@@ -11,7 +11,7 @@
     "start:go:tunnel": "expo start --go --tunnel --clear",
     "start:tunnel": "expo start --tunnel",
     "ios": "expo start --lan --clear",
-    "test": "node --test test/connectivity.test.js test/assistantIntent.test.js test/offlinePackage.test.js test/offlineRouter.test.js test/offlineRouteCoverage.test.js test/offlineRoutePackage.test.js test/offlineNavigation.test.js test/mobileSourceManifest.test.js test/deviceIdentity.test.js test/navigationCommands.test.js test/navigationCommandExecutor.test.js test/navigationState.test.js test/navigationGuidance.test.js test/navigationSpeechPlanner.test.js test/partyNavigation.test.js test/poiClustering.test.js test/localTransport.test.js test/emergencyPacket.test.js test/nicknamePolicy.test.js test/locationUpdate.test.js test/mapTiles.test.js",
+    "test": "node --test test/connectivity.test.js test/assistantIntent.test.js test/offlinePackage.test.js test/offlineRouter.test.js test/offlineRouteCoverage.test.js test/offlineRoutePackage.test.js test/offlineNavigation.test.js test/mobileSourceManifest.test.js test/deviceIdentity.test.js test/navigationCommands.test.js test/navigationCommandExecutor.test.js test/navigationState.test.js test/navigationGuidance.test.js test/navigationSpeechPlanner.test.js test/partyNavigation.test.js test/poiClustering.test.js test/localTransport.test.js test/nativeTransportContract.test.js test/appRecovery.test.js test/emergencyPacket.test.js test/nicknamePolicy.test.js test/locationUpdate.test.js test/mapTiles.test.js",
     "check": "expo export --platform ios --output-dir dist-ios",
     "prebuild": "expo prebuild",
     "build:android:preview": "npx eas build --platform android --profile preview",

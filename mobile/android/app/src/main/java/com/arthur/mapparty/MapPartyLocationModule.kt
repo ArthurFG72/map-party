@@ -14,6 +14,7 @@ import android.os.Looper
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -119,6 +120,23 @@ class MapPartyLocationModule(private val context: ReactApplicationContext) : Rea
   }
 
   @ReactMethod
+  fun configureBackgroundUpload(options: ReadableMap, promise: Promise) {
+    val required = listOf("serverUrl", "roomId", "participantId", "deviceId", "credential")
+    if (required.any { !options.hasKey(it) || options.getString(it).isNullOrBlank() }) {
+      promise.reject("INVALID_BACKGROUND_UPLOAD", "Configuração nativa de localização incompleta")
+      return
+    }
+    context.getSharedPreferences("mapparty-background-location", Context.MODE_PRIVATE).edit()
+      .putString("serverUrl", options.getString("serverUrl"))
+      .putString("roomId", options.getString("roomId"))
+      .putString("participantId", options.getString("participantId"))
+      .putString("deviceId", options.getString("deviceId"))
+      .apply()
+    SecureCredentialStore.save(context, options.getString("credential")!!)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
   fun start(promise: Promise) {
     if (!hasPermission()) { promise.reject("LOCATION_PERMISSION", "Permissão de localização não concedida"); return }
     stopInternal()
@@ -142,7 +160,6 @@ class MapPartyLocationModule(private val context: ReactApplicationContext) : Rea
   }
 
   override fun onCatalystInstanceDestroy() {
-    stopInternal()
     context.unregisterReceiver(locationReceiver)
     super.onCatalystInstanceDestroy()
   }

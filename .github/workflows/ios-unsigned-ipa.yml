@@ -11,10 +11,7 @@ on:
 
 jobs:
   build-ios-unsigned:
-    # ExpoModulesJSI currently requires Swift tools 6.2. Use the Intel
-    # macOS 26 image, whose Xcode 26 toolchain provides that Swift version.
-    # Use the standard Apple Silicon pool; the Intel pool can be unavailable
-    # on free/private repositories even when the label is valid.
+    # ExpoModulesJSI currently requires Swift tools 6.2.
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -59,24 +56,51 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Run mobile contract tests
+        run: npm test -w mobile
+
       - name: Select compatible Xcode toolchain
         run: |
+          SELECTED_XCODE=""
           if [ -d /Applications/Xcode_26.6.app ]; then
-            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+            SELECTED_XCODE=/Applications/Xcode_26.6.app
           elif [ -d /Applications/Xcode_26.5.app ]; then
-            sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+            SELECTED_XCODE=/Applications/Xcode_26.5.app
           elif [ -d /Applications/Xcode_26.4.1.app ]; then
-            sudo xcode-select -s /Applications/Xcode_26.4.1.app/Contents/Developer
-          elif [ -d /Applications/Xcode_16.4.app ]; then
-            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
-          elif [ -d /Applications/Xcode_16.3.app ]; then
-            sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+            SELECTED_XCODE=/Applications/Xcode_26.4.1.app
           fi
+          if [ -z "$SELECTED_XCODE" ]; then
+            echo 'Xcode 26.4.1 or newer is required for the Swift 6.2 iOS package.' >&2
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
+            exit 1
+          fi
+          sudo xcode-select -s "$SELECTED_XCODE/Contents/Developer"
           xcodebuild -version
+          swift --version
+          SWIFT_VERSION="$(swift --version | sed -nE 's/^Apple Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p' | head -n 1)"
+          SWIFT_MAJOR="${SWIFT_VERSION%% *}"
+          SWIFT_MINOR="${SWIFT_VERSION##* }"
+          if [ -z "$SWIFT_VERSION" ] || [ "$SWIFT_MAJOR" -lt 6 ] || { [ "$SWIFT_MAJOR" -eq 6 ] && [ "$SWIFT_MINOR" -lt 2 ]; }; then
+            echo "Swift 6.2 or newer is required; selected toolchain reports ${SWIFT_VERSION:-unknown}." >&2
+            exit 1
+          fi
+
+      - name: Validate local CocoaPods specification
+        working-directory: mobile
+        run: |
+          ruby -r cocoapods -e '
+            spec = Pod::Specification.from_file("modules/map-party-local-transport/ios/MapPartyLocalTransport.podspec")
+            abort "podspec homepage is missing" if spec.homepage.to_s.empty?
+            abort "podspec source is missing" if spec.source.nil? || spec.source.empty?
+            abort "podspec has no source files" if spec.source_files.empty?
+            puts "Validated #{spec.name} #{spec.version}: homepage, source, and source files present"
+          '
 
       - name: Generate iOS project
         working-directory: mobile
-        run: npx expo prebuild --platform ios --non-interactive
+        run: |
+          set -o pipefail
+          npx expo prebuild --platform ios --non-interactive 2>&1 | tee prebuild-ios.log
 
       - name: Build unsigned device app
         working-directory: mobile
@@ -99,6 +123,7 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=MAP_PARTY_REQUIRE_NEARBY \
             build 2>&1 | tee ios/xcodebuild.log
 
       - name: Upload iOS build log
@@ -134,6 +159,12 @@ jobs:
             npm --version || true
             echo '--- project files ---'
             find ios -maxdepth 2 -type f \( -name '*.log' -o -name 'Podfile' -o -name 'Podfile.lock' \) -print 2>/dev/null || true
+            echo '--- prebuild and dependency diagnostics ---'
+            if [ -f prebuild-ios.log ]; then
+              grep -n -E -i 'error|failed|could not|unable|pod install|invalid|missing required' prebuild-ios.log | tail -n 100 || true
+            else
+              echo 'prebuild-ios.log was not created; failure occurred before iOS prebuild'
+            fi
             echo '--- compiler diagnostics ---'
             if [ -f ios/xcodebuild.log ]; then
               grep -n -E -i 'error:|fatal error:|undefined symbol|SwiftEmitModule|CompileSwift|No such module|CodeSign|Provisioning|ARCHIVE FAILED|BUILD FAILED' ios/xcodebuild.log | head -n 160 || true
@@ -154,6 +185,7 @@ jobs:
             mobile/ios/**/*.log
             mobile/ios/**/Podfile
             mobile/ios/**/Podfile.lock
+            mobile/prebuild-ios.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -171,7 +203,7 @@ jobs:
           )"
           {
             echo '### Xcode native build failure (last diagnostics)'
-            echo 'The JavaScript bundle and prebuild completed; the failure happened in xcodebuild.'
+            echo 'Inspect the first failing workflow stage and compiler or dependency diagnostics below.'
             echo '```text'
             printf '%s\n' "$matches"
             echo '```'

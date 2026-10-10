@@ -18,7 +18,9 @@ public final class MapPartyLocalTransportModule: Module {
       transport.start(roomID: roomID, participantID: participantID)
     }
     AsyncFunction("stop") { transport.stop() }
-    AsyncFunction("sendJson") { (json: String) in transport.send(json: json) }
+    AsyncFunction("sendJson") { (json: String) async -> Bool in
+      await transport.send(json: json)
+    }
     AsyncFunction("verify") { (endpointID: String, accepted: Bool) in
       transport.verify(endpointID: endpointID, accepted: accepted)
     }

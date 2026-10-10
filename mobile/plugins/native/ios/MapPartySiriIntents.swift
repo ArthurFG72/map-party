@@ -61,8 +61,7 @@ struct MapPartyNavigationStatusIntent: AppIntent {
 
 @available(iOS 16.0, *)
 struct MapPartyShortcuts: AppShortcutsProvider {
-  // AppShortcutsProvider.appShortcuts is an AppShortcutsBuilder on current
-  // Xcode. Swift 6.2 rejects an array literal in this property.
+  @AppShortcutsBuilder
   static var appShortcuts: [AppShortcut] {
     AppShortcut(intent: MapPartyStartNavigationIntent(), phrases: ["Iniciar navegacao no \(.applicationName)"], shortTitle: "Iniciar navegacao", systemImageName: "location.fill")
     AppShortcut(intent: MapPartyPauseNavigationIntent(), phrases: ["Pausar navegacao no \(.applicationName)"], shortTitle: "Pausar navegacao", systemImageName: "pause.fill")

@@ -1,8 +1,9 @@
-import { Component, useState } from 'react';
+import { Component, Fragment, useState } from 'react';
 import { DeviceEventEmitter, Linking, NativeModules, Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { EventEmitter, requireOptionalNativeModule } from 'expo-modules-core';
 import HomeScreen from './src/screens/HomeScreen';
 import PartyScreen from './src/screens/PartyScreen';
+import { recordDiagnosticEvent } from './src/offlineStore';
 
 function installNativeTransport() {
   const nativeModule = NativeModules?.MapPartyLocalTransport;
@@ -77,7 +78,7 @@ function WebFallback() {
 }
 
 class NativeRenderBoundary extends Component {
-  state = { error: null };
+  state = { error: null, generation: 0 };
 
   static getDerivedStateFromError(error) {
     return { error };
@@ -85,14 +86,20 @@ class NativeRenderBoundary extends Component {
 
   componentDidCatch(error, info) {
     console.error('[MapParty] render failure', error, info?.componentStack || '');
+    recordDiagnosticEvent('render_failure', { message: error?.message, component: info?.componentStack });
   }
 
+  recover = () => this.setState((current) => ({ error: null, generation: current.generation + 1 }));
+
   render() {
-    if (!this.state.error) return this.props.children;
+    if (!this.state.error) return <Fragment key={this.state.generation}>{this.props.children}</Fragment>;
     return <View style={styles.renderFailure}>
       <Text style={styles.renderFailureTitle}>Não foi possível abrir o mapa</Text>
       <Text style={styles.renderFailureMessage}>O aplicativo continua aberto. Feche e abra novamente para tentar restaurar a sessão.</Text>
       <Text selectable style={styles.renderFailureDetails}>{String(this.state.error?.message || this.state.error)}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Tentar recuperar a sessão" onPress={this.recover} style={styles.recoveryButton}>
+        <Text style={styles.recoveryButtonText}>Tentar recuperar</Text>
+      </Pressable>
     </View>;
   }
 }
@@ -117,5 +124,5 @@ const styles = StyleSheet.create({
   renderFailure: { flex: 1, padding: 24, justifyContent: 'center', backgroundColor: '#0f172a' },
   renderFailureTitle: { color: '#fff', fontSize: 22, fontWeight: '800', textAlign: 'center' },
   renderFailureMessage: { marginTop: 12, color: '#cbd5e1', fontSize: 14, lineHeight: 21, textAlign: 'center' },
-  renderFailureDetails: { marginTop: 18, color: '#fca5a5', fontSize: 11 }
+  renderFailureDetails: { marginTop: 18, color: '#fca5a5', fontSize: 11 }, recoveryButton: { marginTop: 18, minHeight: 44, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#2563eb', alignItems: 'center', justifyContent: 'center' }, recoveryButtonText: { color: '#fff', fontWeight: '800' }
 });

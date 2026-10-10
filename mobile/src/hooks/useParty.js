@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, NativeModules } from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import { io } from 'socket.io-client';
 import NetInfo from '@react-native-community/netinfo';
 import { SERVER_URL } from '../config';
 import { CONTRACT_VERSION, createCommandId } from '../contracts';
 import { createLocationUpdate } from '../locationUpdate';
-import { getOrCreateDeviceId, getOrCreateParticipantToken, loadPartySnapshot, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
+import { getOrCreateDeviceId, getOrCreateParticipantToken, loadPartySnapshot, recordDiagnosticEvent, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
 import { routeFromNavigationRerouted } from '../partyNavigation';
 import { createLocalTransport } from '../localTransport';
 import { relayEmergencyPacket } from '../api';
@@ -14,6 +16,10 @@ const EARTH_RADIUS_METERS = 6_371_000;
 const LOCATION_HEARTBEAT_MS = 10_000;
 const LOCATION_MIN_MOVEMENT_METERS = 4;
 const LOCATION_DISPLAY_MAX_AGE_MS = 30_000;
+
+function nativeLocationModule() {
+  return NativeModules?.MapPartyLocation || requireOptionalNativeModule('MapPartyLocation');
+}
 
 function locationDistanceMeters(first, second) {
   if (!first || !second) return Number.POSITIVE_INFINITY;
@@ -130,10 +136,12 @@ export function useParty(roomId, name, visible = true) {
   useEffect(() => {
     let active = true;
     loadPartySnapshot(roomId).then((snapshot) => {
-      if (!active || !snapshot) return;
+      if (!active || !snapshot || joinedRef.current) return;
       setParticipants(snapshot.participants || []);
       cachedRouteRef.current = snapshot.route || null;
-      setRoute(snapshot.route || null);
+      // Local history is available for an explicit restore action only. A
+      // fresh party screen must not draw the previous route automatically.
+      setRoute(null);
     });
     return () => { active = false; };
   }, [roomId]);
@@ -172,7 +180,19 @@ export function useParty(roomId, name, visible = true) {
       });
     }
     const localTransport = createLocalTransport({ roomId, participantId: name, onVerification: (event) => {
-      if (event?.endpointId) localTransportRef.current?.verifyConnection(event.endpointId, true).catch(() => undefined);
+      if (!event?.endpointId) return;
+      const verify = (accepted) => localTransportRef.current?.verifyConnection(event.endpointId, accepted).catch(() => undefined);
+      const code = String(event.authenticationToken || '').trim();
+      if (!code) { verify(false); return; }
+      Alert.alert(
+        'Confirmar conexão próxima',
+        `Compare este código nos dois aparelhos antes de aceitar:\n\n${code}`,
+        [
+          { text: 'Recusar', style: 'cancel', onPress: () => verify(false) },
+          { text: 'Código confere', onPress: () => verify(true) }
+        ],
+        { cancelable: false }
+      );
     }, onMessage: (message) => {
       if (message?.type === 'direct-message' && message.messageId
         && message.targetParticipantId === participantIdRef.current && message.text) {
@@ -242,6 +262,17 @@ export function useParty(roomId, name, visible = true) {
         }
         participantIdRef.current = reply.participantId;
         setParticipantId(reply.participantId);
+        localTransport.setIdentity(reply.participantId).catch(() => undefined);
+        const locationModule = nativeLocationModule();
+        if (reply.deviceCredential && locationModule?.configureBackgroundUpload) {
+          Promise.resolve(locationModule.configureBackgroundUpload({
+            serverUrl: SERVER_URL,
+            roomId,
+            participantId: reply.participantId,
+            deviceId: deviceIdRef.current,
+            credential: reply.deviceCredential
+          })).catch(() => undefined);
+        }
         joinedRef.current = true;
         applySnapshot(reply.snapshot);
         setJoined(true);
@@ -263,9 +294,11 @@ export function useParty(roomId, name, visible = true) {
       setConnected(false);
       setJoined(false);
       setConnectionStatus('reconnecting');
+      recordDiagnosticEvent('socket_disconnect', { roomId });
     }
     function onConnectError() {
       setConnectionStatus('unavailable');
+      recordDiagnosticEvent('socket_connect_error', { roomId, server: SERVER_URL });
       setError(`Servidor indisponível em ${SERVER_URL}. Últimos dados mantidos offline.`);
     }
     function onReconnectAttempt() { setConnectionStatus('reconnecting'); }
@@ -386,7 +419,10 @@ export function useParty(roomId, name, visible = true) {
   useEffect(() => {
     const timer = setInterval(() => {
       const latest = lastObservedLocationRef.current;
-      if (latest) sendLocation(latest);
+      // Heartbeat must reach the server even when the device is stationary.
+      // Otherwise peers stop receiving serverReceivedAt updates and hide the
+      // participant as stale after LOCATION_DISPLAY_MAX_AGE_MS.
+      if (latest) sendLocation(latest, { forceBroadcast: true });
     }, LOCATION_HEARTBEAT_MS);
     return () => clearInterval(timer);
   }, [sendLocation]);

@@ -14,7 +14,7 @@ import { speakAssistantText, speakNavigationGuidance, stopNavigationVoice } from
 import { assistantReplyForIntent, parseAssistantIntent } from '../assistantIntent';
 import { useSpeechAssistant } from '../hooks/useSpeechAssistant';
 import { useSiriCommandBridge } from '../hooks/useSiriCommandBridge';
-import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadNavigationSession, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadPendingRoutePerformance, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, removeFavoritePlace, removePendingRecognitionTrack, removePendingRoutePerformance, saveFavoritePlace, saveNavigationSession, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, savePendingRoutePerformance, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
+import { addRecognitionAttention, appendRecognitionPoint, closeRecognitionTrack, createRecognitionTrack, loadFavoritePlaces, loadNavigationSession, loadOfflineRoutePackage, loadPartyPoints, loadPendingRecognitionTracks, loadPendingRoutePerformance, loadRecognitionTrack, loadRecentPlaces, loadRouteHistory, loadRouteOrigins, placeStorageId, recordDiagnosticEvent, removeFavoritePlace, removePendingRecognitionTrack, removePendingRoutePerformance, saveFavoritePlace, saveNavigationSession, saveOfflineRoutePackage, savePartyPoints, savePartySnapshot, savePendingRecognitionTrack, savePendingRoutePerformance, saveRecentPlace, saveRouteHistory, saveRouteOrigin } from '../offlineStore';
 import { buildReturnPoints } from '../routeReturn';
 import { calculatePackagedOfflineRoute } from '../offlineNavigation';
 import { createOfflineRoutePackage } from '../offlineRoutePackage';
@@ -371,6 +371,9 @@ export default function PartyScreen({ session, onLeave }) {
   // A temporary detour is stored locally first. The shared/personal route is
   // the original route and must not overwrite the active detour on rerender.
   const navigationRoute = localRoute || party.personalRoute || party.sharedRoute || party.route;
+  // Uma rota pode estar pronta antes de o usuário iniciar o deslocamento.
+  // Esse estado também precisa habilitar a inserção de desvios.
+  const routePrepared = Boolean(navigationRoute?.destination && navigationRoute?.geometry?.coordinates?.length > 1);
   const returnOrigin = completedRoute?.origin
     || completedOriginRef.current
     || originalNavigationRouteRef.current?.origin;
@@ -406,34 +409,38 @@ export default function PartyScreen({ session, onLeave }) {
       trace: (overrides.trace || navigationTraceRef.current).slice(-500)
     }).catch(() => undefined);
   }
+
+  function restoreSavedNavigation(saved) {
+    const restoredRoute = saved.activeRoute;
+    const restoredOriginal = saved.originalRoute || { ...restoredRoute, origin: saved.originalOrigin, destination: saved.originalDestination };
+    originalNavigationRouteRef.current = restoredOriginal;
+    routeOriginRef.current = saved.originalOrigin;
+    setLocalRoute(restoredRoute);
+    setPoints({ origin: saved.originalOrigin, destination: saved.originalDestination });
+    setTemporaryStop(saved.temporaryStop || null);
+    traveledMetersRef.current = Math.max(0, Number(saved.traveledMeters) || 0);
+    setTraveledMeters(traveledMetersRef.current);
+    plannedTripMetersRef.current = Number(restoredRoute.distance) || 0;
+    setPlannedTripMeters(plannedTripMetersRef.current);
+    navigationStartedAtRef.current = Number(saved.startedAt) || Date.now();
+    navigationTraceRef.current = Array.isArray(saved.trace) ? saved.trace.slice(-500) : [];
+    lastTraveledPositionRef.current = locationPositionRef.current;
+    movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
+    transitionNavigationState({ type: 'navigation.start' });
+    if (locationPositionRef.current) setNavigationGuidance(buildNavigationGuidance(restoredRoute, locationPositionRef.current));
+    setMessage('Navegação restaurada após retornar ao app.');
+  }
+
   useEffect(() => {
     if (navigationSessionRestoreStartedRef.current) return undefined;
     navigationSessionRestoreStartedRef.current = true;
     let active = true;
     loadNavigationSession(session.roomId).then((saved) => {
       if (!active || !saved?.active || navigationStartedAtRef.current > 0) return;
-      const restoredRoute = saved.activeRoute;
-      const restoredOriginal = saved.originalRoute || {
-        ...restoredRoute,
-        origin: saved.originalOrigin,
-        destination: saved.originalDestination
-      };
-      originalNavigationRouteRef.current = restoredOriginal;
-      routeOriginRef.current = saved.originalOrigin;
-      setLocalRoute(restoredRoute);
-      setPoints({ origin: saved.originalOrigin, destination: saved.originalDestination });
-      setTemporaryStop(saved.temporaryStop || null);
-      traveledMetersRef.current = Math.max(0, Number(saved.traveledMeters) || 0);
-      setTraveledMeters(traveledMetersRef.current);
-      plannedTripMetersRef.current = Number(restoredRoute.distance) || 0;
-      setPlannedTripMeters(plannedTripMetersRef.current);
-      navigationStartedAtRef.current = Number(saved.startedAt) || Date.now();
-      navigationTraceRef.current = Array.isArray(saved.trace) ? saved.trace.slice(-500) : [];
-      lastTraveledPositionRef.current = locationPositionRef.current;
-      movementEvidenceRef.current = { score: 0, pendingMeters: 0 };
-      transitionNavigationState({ type: 'navigation.start' });
-      if (locationPositionRef.current) setNavigationGuidance(buildNavigationGuidance(restoredRoute, locationPositionRef.current));
-      setMessage('Navegação restaurada após retornar ao app.');
+      return Alert.alert('Retomar navegação?', 'Foi encontrada uma navegação interrompida neste aparelho.', [
+        { text: 'Agora não', style: 'cancel', onPress: () => setMessage('Navegação interrompida mantida salva neste aparelho.') },
+        { text: 'Continuar', onPress: () => { if (active) restoreSavedNavigation(saved); } }
+      ]);
     }).catch(() => undefined);
     return () => { active = false; };
   }, [session.roomId]);
@@ -1169,7 +1176,7 @@ export default function PartyScreen({ session, onLeave }) {
       label: result?.label || details.address || details.title,
       source: 'search'
     };
-    if (navigationActive && kind === 'destination' && (navigationRoute?.destination || originalNavigationRouteRef.current?.destination)) {
+    if ((navigationActive || detourSearchOpen || temporaryStopArmed) && kind === 'destination' && (navigationRoute?.destination || originalNavigationRouteRef.current?.destination)) {
       void addTemporaryStop(point);
       return;
     }
@@ -1468,7 +1475,9 @@ export default function PartyScreen({ session, onLeave }) {
         setLoading(false);
       }
     }
-    if (!routeToStart) return setMessage('Defina origem e destino primeiro.');
+    if (!routeToStart || !currentDestination || !isUsableRoute(routeToStart)) {
+      return setMessage('Defina um endereço válido e aguarde o cálculo da rota antes de iniciar.');
+    }
     offRouteReadingsRef.current = 0;
     if (!temporaryStop) originalNavigationRouteRef.current = routeToStart;
     routeOriginRef.current = routeToStart.origin || routeOriginRef.current;
@@ -1497,7 +1506,12 @@ export default function PartyScreen({ session, onLeave }) {
     const latitude = Number(point?.lat);
     const longitude = Number(point?.lng);
     const original = originalNavigationRouteRef.current || navigationRoute;
+    const navigationWasActive = navigationActive;
     const currentPosition = location.position || locationPositionRef.current;
+    if (navigationWasActive && navigationLocked) {
+      setMessage('Desbloqueie o cadeado para adicionar um desvio durante a navegação.');
+      return false;
+    }
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !original?.destination || !currentPosition) {
       setMessage('Aguarde o GPS para adicionar uma parada temporÃ¡ria.');
       return false;
@@ -1561,9 +1575,11 @@ export default function PartyScreen({ session, onLeave }) {
       setShowSavedPlaces(false);
       savePartyPoints(session.roomId, { origin: original.origin || routeOriginRef.current || currentPosition, destination: original.destination });
       if (detourPackage) saveOfflineRoutePackage(detourPackage).catch(() => undefined);
-      persistNavigationSession({ active: true, status: 'navigating', originalRoute: original, activeRoute: combinedRoute, temporaryStop: stop });
+      persistNavigationSession({ active: navigationWasActive, status: navigationWasActive ? 'navigating' : 'paused', originalRoute: original, activeRoute: combinedRoute, temporaryStop: stop });
       party.clearPersonalRoute();
-      setMessage('Parada temporÃ¡ria definida. A rota original permanece guardada.');
+      setMessage(navigationWasActive
+        ? 'Parada temporária definida. A rota original permanece guardada.'
+        : 'Desvio definido. A rota está pronta; toque em “Iniciar rota” quando quiser começar.');
       return true;
     } catch (error) {
       setMessage(`NÃ£o foi possÃ­vel calcular a parada: ${error.message}`);
@@ -1663,7 +1679,6 @@ export default function PartyScreen({ session, onLeave }) {
     setResults([]);
     setActiveKind('destination');
     offRouteReadingsRef.current = 0;
-    party.setVisibility(false);
     party.clearPersonalRoute();
     setMessage('Navegação e compartilhamento pausados.');
   }
@@ -1807,6 +1822,7 @@ export default function PartyScreen({ session, onLeave }) {
       setMessage(automatic ? 'Rota alternativa aplicada neste dispositivo.' : 'Rota recalculada neste dispositivo.');
     } catch (error) {
       setMessage(error.message);
+      recordDiagnosticEvent('route_recalculation_failed', { roomId: session.roomId, error: error.message });
     } finally {
       transitionNavigationState({ type: 'navigation.recalculated' });
       recalculationRef.current = false;
@@ -1925,9 +1941,32 @@ export default function PartyScreen({ session, onLeave }) {
       place.name || place.label || 'Endereço selecionado',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', onPress: () => setPoint(activeKind, { ...place, source: 'saved' }) }
+        {
+          text: 'Confirmar',
+          onPress: () => {
+            const point = { ...place, source: 'saved' };
+            if (detourSearchOpen && activeKind === 'destination' && routePrepared) {
+              void addTemporaryStop(point);
+              return;
+            }
+            void setPoint(activeKind, point);
+          }
+        }
       ]
     );
+  }
+
+  function restoreRouteFromHistory(historyItem) {
+    if (!historyItem?.destination) {
+      setMessage('Ainda não existe uma última rota salva.');
+      return;
+    }
+    if (navigationActive) {
+      setMessage('Pare a navegação atual antes de buscar a última rota.');
+      return;
+    }
+    setActiveKind('destination');
+    void setPoint('destination', { ...historyItem.destination, source: 'saved' });
   }
 
   function toggleCategory(category) {
@@ -2034,6 +2073,16 @@ export default function PartyScreen({ session, onLeave }) {
     setResults([]);
     setShowSavedPlaces(false);
     setMessage('Busca de desvio cancelada. A rota atual foi preservada.');
+  }
+
+  function cancelPlaceSearch() {
+    searchInputRef.current?.blur();
+    Keyboard.dismiss();
+    setDetourSearchOpen(false);
+    setQuery('');
+    setResults([]);
+    setShowSavedPlaces(false);
+    setMessage('Busca cancelada. A rota atual foi preservada.');
   }
 
   async function publishRecognitionTrack() {
@@ -2167,7 +2216,7 @@ export default function PartyScreen({ session, onLeave }) {
           if (navigationLocked) return;
           const { latitude: lat, longitude: lng } = event.nativeEvent.coordinate;
           const point = { lat, lng, timestamp: Date.now(), accuracy: 0, label: 'Ponto selecionado no mapa', source: 'map' };
-          if (navigationActive) openNavigationMapMenu(point);
+           if (navigationActive || routePrepared) openNavigationMapMenu(point);
           else chooseAttentionPoint(point);
         }}
         onPress={(event) => {
@@ -2188,10 +2237,14 @@ export default function PartyScreen({ session, onLeave }) {
           setSelectedPoi(null);
           setShowSavedPlaces(false);
           const pointKind = navigationActive || routeProfile === 'boat' ? 'destination' : activeKind;
-          if (navigationActive && !temporaryStopArmed) {
+           if (navigationActive && !temporaryStopArmed) {
             setMessage('Toque em “Adicionar desvio” com o cadeado aberto antes de marcar o ponto.');
             return;
           }
+           if (routePrepared && temporaryStopArmed) {
+             void addTemporaryStop({ lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
+             return;
+           }
           setPoint(pointKind, { lat, lng, label: 'Ponto selecionado no mapa', source: 'map' });
           if (navigationActive) setTemporaryStopArmed(false);
         }}
@@ -2405,7 +2458,7 @@ export default function PartyScreen({ session, onLeave }) {
           />
           {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); setShowSavedPlaces(true); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>{'\u00d7'}</Text></Pressable>}
            <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
-           {detourSearchOpen && <Pressable accessibilityRole="button" accessibilityLabel="Cancelar busca de desvio" onPress={cancelDetourSearch} style={styles.cancelSearchButton}><Text style={styles.cancelSearchText}>Cancelar</Text></Pressable>}
+           {(detourSearchOpen || showSavedPlaces || query.trim() || results.length > 0) && <Pressable accessibilityRole="button" accessibilityLabel={detourSearchOpen ? 'Cancelar busca de desvio' : 'Cancelar busca de endereço'} onPress={detourSearchOpen ? cancelDetourSearch : cancelPlaceSearch} style={styles.cancelSearchButton}><Text style={styles.cancelSearchText}>Cancelar</Text></Pressable>}
         </View>
           {false && <View style={styles.utilityMenu}>
          <View style={styles.assistantRow}>
@@ -2503,6 +2556,7 @@ export default function PartyScreen({ session, onLeave }) {
                 <Text numberOfLines={1} style={styles.resultTitle}>{origin.title} → {destination.title}</Text>
                 <Text numberOfLines={2} style={styles.resultAddress}>{origin.address || 'Origem'} → {destination.address || 'Destino'}</Text>
               </View>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Buscar rota para ${destination.title}`} onPress={() => restoreRouteFromHistory(route)} style={styles.restoreRouteButton}><Text style={styles.restoreRouteButtonText}>Buscar</Text></Pressable>
               <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${origin.title} como origem`} onPress={() => setPoint('origin', { ...route.origin, source: 'saved' })} style={styles.savedOriginButton}><Text style={styles.savedOriginText}>A</Text></Pressable>
               <Pressable accessibilityRole="button" accessibilityLabel={`Usar ${destination.title} como destino`} onPress={() => setPoint('destination', { ...route.destination, source: 'saved' })} style={styles.savedDestinationButton}><Text style={styles.savedDestinationText}>B</Text></Pressable>
             </View>;
@@ -2641,6 +2695,14 @@ export default function PartyScreen({ session, onLeave }) {
           >
             <Text maxFontSizeMultiplier={1.1} style={styles.startNavigationText}>{loading ? 'Calculando rota…' : navigationRoute ? 'Iniciar rota' : 'Calcular e iniciar'}</Text>
           </Pressable>}
+          {!navigationActive && routePrepared && !navigationLocked && <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Adicionar desvio temporário antes de iniciar a rota"
+            onPress={() => { setTemporaryStopArmed(true); setMessage('Desvio ativado. Toque e segure no mapa ou procure um endereço.'); }}
+            style={styles.detourButton}
+          >
+            <Text maxFontSizeMultiplier={1.1} style={styles.detourButtonText}>{temporaryStopArmed ? 'Escolha o desvio' : 'Adicionar desvio'}</Text>
+          </Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Enviar SOS criptografado" accessibilityState={{ disabled: sosSending, busy: sosSending }} disabled={sosSending} onPress={sendSos} style={[styles.sosButton, (!navigationRoute || navigationActive) && styles.sosButtonSolo, sosSending && styles.disabled]}>
             <Text maxFontSizeMultiplier={1.1} style={styles.sosButtonText}>{sosSending ? 'Enviando...' : 'SOS'}</Text>
           </Pressable>
@@ -2740,6 +2802,7 @@ const styles = StyleSheet.create({
   savedPlaceRow: { minHeight: 62, paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1', flexDirection: 'row', alignItems: 'center', gap: 6 },
   savedPlaceText: { flex: 1, minWidth: 0 },
   routeOriginBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7, backgroundColor: '#dcfce7', color: '#166534', fontSize: 10, fontWeight: '800' }, routeHistoryRow: { minHeight: 70, paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#cbd5e1', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  restoreRouteButton: { minWidth: 58, height: 44, paddingHorizontal: 8, borderRadius: 10, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center' }, restoreRouteButtonText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   savedOriginButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center' }, savedOriginText: { color: '#166534', fontSize: 13, fontWeight: '900' },
   savedDestinationButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' }, savedDestinationText: { color: '#1e40af', fontSize: 13, fontWeight: '900' },
   savedFavoriteButton: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#fffbeb', alignItems: 'center', justifyContent: 'center' }, savedFavoriteText: { color: '#d97706', fontSize: 20 },

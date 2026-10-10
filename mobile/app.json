@@ -34,7 +34,7 @@
     "android": {
       "package": "com.arthur.mapparty",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/eagle-app-icon.png",
+        "foregroundImage": "./assets/eagle-app-icon-foreground.png",
         "backgroundColor": "#0b172a"
       },
       "permissions": [

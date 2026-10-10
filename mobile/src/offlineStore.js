@@ -5,6 +5,7 @@ import { createDeviceId, validDeviceId } from './deviceIdentity';
 let databasePromise;
 let placeMutationQueue = Promise.resolve();
 let navigationSessionQueue = Promise.resolve();
+let diagnosticsQueue = Promise.resolve();
 let participantTokenPromise;
 let deviceIdPromise;
 
@@ -15,6 +16,7 @@ const ROUTE_HISTORY_KEY = 'routes:history';
 const PARTICIPANT_TOKEN_KEY = 'identity:participant-token';
 const DEVICE_ID_KEY = 'identity:device-id';
 const ACTIVE_TRACKING_ROOM_KEY = 'tracking:active-room';
+const DIAGNOSTICS_KEY = 'diagnostics:events';
 const PERMISSION_PROMPT_PREFIX = 'permissions:prompted:';
 const MAX_FAVORITE_PLACES = 50;
 const MAX_RECENT_PLACES = 12;
@@ -370,6 +372,24 @@ export function loadPartyPoints(roomId) {
 export function setActiveTrackingRoom(roomId) {
   if (typeof roomId !== 'string' || !roomId.trim()) return writeState(ACTIVE_TRACKING_ROOM_KEY, null);
   return writeState(ACTIVE_TRACKING_ROOM_KEY, roomId.trim().slice(0, 80));
+}
+
+export function recordDiagnosticEvent(type, details = {}) {
+  const event = {
+    type: String(type || 'unknown').slice(0, 80),
+    at: Date.now(),
+    details: Object.fromEntries(Object.entries(details || {}).slice(0, 12).map(([key, value]) => [String(key).slice(0, 40), String(value).slice(0, 240)]))
+  };
+  const operation = async () => {
+    const current = (await readState(DIAGNOSTICS_KEY) || []).filter((item) => item && typeof item === 'object');
+    await writeState(DIAGNOSTICS_KEY, [...current, event].slice(-200));
+  };
+  diagnosticsQueue = diagnosticsQueue.then(operation, operation).catch(() => undefined);
+  return diagnosticsQueue;
+}
+
+export function loadDiagnosticEvents() {
+  return readState(DIAGNOSTICS_KEY).then((events) => Array.isArray(events) ? events.slice(-200) : []).catch(() => []);
 }
 
 export function loadActiveTrackingRoom() {

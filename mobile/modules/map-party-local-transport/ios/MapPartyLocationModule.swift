@@ -1,5 +1,7 @@
 import ExpoModulesCore
 import CoreLocation
+import Foundation
+import Security
 
 private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegate {
   weak var owner: MapPartyLocationModule?
@@ -13,8 +15,8 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
     // fix and can turn horizontal GPS noise into visible phantom movement.
     // Use the native high-accuracy provider in tracking too; JS stabilization
     // still rejects implausible jumps before they reach the map.
-    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
-    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 5)
+    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : (mode == "boat" ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters)
+    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 20)
     manager.pausesLocationUpdatesAutomatically = false
     manager.activityType = mode == "navigation" ? .automotiveNavigation : (mode == "boat" ? .otherNavigation : .other)
     manager.allowsBackgroundLocationUpdates = navigation || mode == "tracking"
@@ -59,8 +61,17 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
 }
 
 public final class MapPartyLocationModule: Module {
+  private static let keychainService = "com.arthur.mapparty.background"
+  private static let keychainAccount = "location-credential"
   private let delegate = MapPartyLocationDelegate()
   private var authorizationContinuation: CheckedContinuation<Bool, Never>?
+  private lazy var uploadSession: URLSession = {
+    let configuration = URLSessionConfiguration.background(withIdentifier: "com.arthur.mapparty.location-upload")
+    configuration.isDiscretionary = false
+    configuration.sessionSendsLaunchEvents = true
+    configuration.waitsForConnectivity = true
+    return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+  }()
 
   public func definition() -> ModuleDefinition {
     Name("MapPartyLocation")
@@ -90,10 +101,22 @@ public final class MapPartyLocationModule: Module {
       DispatchQueue.main.async { self.delegate.configure(mode: mode) }
     }
 
+    AsyncFunction("configureBackgroundUpload") { (options: [String: String]) -> Bool in
+      let required = ["serverUrl", "roomId", "participantId", "deviceId", "credential"]
+      guard required.allSatisfy({ !(options[$0]?.isEmpty ?? true) }) else { return false }
+      let defaults = UserDefaults.standard
+      defaults.set(options["serverUrl"], forKey: "mapparty.background.serverUrl")
+      defaults.set(options["roomId"], forKey: "mapparty.background.roomId")
+      defaults.set(options["participantId"], forKey: "mapparty.background.participantId")
+      defaults.set(options["deviceId"], forKey: "mapparty.background.deviceId")
+      return self.saveCredential(options["credential"]!)
+    }
+
     AsyncFunction("start") {
       DispatchQueue.main.async {
         self.delegate.manager.startUpdatingLocation()
         self.delegate.manager.requestLocation()
+        self.dispatchPendingIfConfigured()
       }
     }
 
@@ -106,15 +129,110 @@ public final class MapPartyLocationModule: Module {
 
   fileprivate func sendLocation(_ location: CLLocation) {
     let coordinate = location.coordinate
-    var body: [String: Any] = [
+    var eventBody: [String: Any] = [
       "latitude": coordinate.latitude,
       "longitude": coordinate.longitude,
       "accuracy": max(0, location.horizontalAccuracy),
       "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
     ]
-    if location.speed >= 0 { body["speed"] = location.speed }
-    if location.course >= 0 { body["heading"] = location.course }
-    sendEvent("onLocation", body)
+    var uploadBody: [String: Any] = [
+      // Keep the native producer identical to Android and the REST contract.
+      "lat": coordinate.latitude,
+      "lng": coordinate.longitude,
+      "accuracy": max(0, location.horizontalAccuracy),
+      "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
+    ]
+    if location.speed >= 0 {
+      eventBody["speed"] = location.speed
+      uploadBody["speed"] = location.speed
+    }
+    if location.course >= 0 {
+      eventBody["heading"] = location.course
+      uploadBody["heading"] = location.course
+    }
+    sendEvent("onLocation", eventBody)
+    uploadLocation(uploadBody)
+  }
+
+  private func uploadLocation(_ body: [String: Any]) {
+    let defaults = UserDefaults.standard
+    guard let serverUrl = defaults.string(forKey: "mapparty.background.serverUrl"),
+          let roomId = defaults.string(forKey: "mapparty.background.roomId"),
+          let deviceId = defaults.string(forKey: "mapparty.background.deviceId"),
+          let credential = credentialValue(),
+          let url = URL(string: "\(serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/api/party/\(roomId)/location") else { return }
+    let sequence = max(defaults.integer(forKey: "mapparty.background.sequence") + 1, Int(Date().timeIntervalSince1970 * 1000))
+    defaults.set(sequence, forKey: "mapparty.background.sequence")
+    var payload = body
+    payload["contractVersion"] = 1
+    payload["locationSequence"] = sequence
+    payload["forceBroadcast"] = true
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+    defaults.set(data, forKey: "mapparty.background.pending")
+    dispatchPending(url: url, deviceId: deviceId, credential: credential)
+  }
+
+  private func dispatchPending(url: URL, deviceId: String, credential: String) {
+    let defaults = UserDefaults.standard
+    guard let pending = defaults.data(forKey: "mapparty.background.pending") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 5
+    request.httpBody = pending
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+    request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+    let sequence = (try? JSONSerialization.jsonObject(with: pending) as? [String: Any])?["locationSequence"] as? NSNumber
+    let task = uploadSession.uploadTask(with: request, from: pending)
+    task.taskDescription = sequence?.stringValue
+    task.resume()
+  }
+
+  private func dispatchPendingIfConfigured() {
+    let defaults = UserDefaults.standard
+    guard let serverUrl = defaults.string(forKey: "mapparty.background.serverUrl"),
+          let roomId = defaults.string(forKey: "mapparty.background.roomId"),
+          let deviceId = defaults.string(forKey: "mapparty.background.deviceId"),
+          let credential = credentialValue(),
+          let url = URL(string: "\(serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/api/party/\(roomId)/location") else { return }
+    dispatchPending(url: url, deviceId: deviceId, credential: credential)
+  }
+
+  private func saveCredential(_ credential: String) -> Bool {
+    guard let data = credential.data(using: .utf8) else { return false }
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: Self.keychainService,
+      kSecAttrAccount as String: Self.keychainAccount
+    ]
+    SecItemDelete(query as CFDictionary)
+    let item = query.merging([
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    ]) { _, new in new }
+    return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+  }
+
+  private func credentialValue() -> String? {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: Self.keychainService,
+      kSecAttrAccount as String: Self.keychainAccount,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne
+    ]
+    var result: CFTypeRef?
+    if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+       let data = result as? Data,
+       let credential = String(data: data, encoding: .utf8) {
+      return credential
+    }
+    let legacy = UserDefaults.standard.string(forKey: "mapparty.background.credential")
+    if let legacy, saveCredential(legacy) {
+      UserDefaults.standard.removeObject(forKey: "mapparty.background.credential")
+      return legacy
+    }
+    return nil
   }
 
   fileprivate func authorizationChanged(_ status: CLAuthorizationStatus) {
@@ -158,5 +276,18 @@ public final class MapPartyLocationModule: Module {
     case .authorizedWhenInUse: return "authorizedWhenInUse"
     @unknown default: return "unknown"
     }
+  }
+}
+
+extension MapPartyLocationModule: URLSessionTaskDelegate {
+  public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    guard error == nil,
+          let response = task.response as? HTTPURLResponse,
+          (200...299).contains(response.statusCode),
+          let taskSequence = task.taskDescription,
+          let pending = UserDefaults.standard.data(forKey: "mapparty.background.pending"),
+          let object = try? JSONSerialization.jsonObject(with: pending) as? [String: Any],
+          String(describing: object["locationSequence"] ?? "") == taskSequence else { return }
+    UserDefaults.standard.removeObject(forKey: "mapparty.background.pending")
   }
 }

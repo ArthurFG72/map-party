@@ -5,6 +5,7 @@ export const MAX_HOPS = 3;
 const MAX_SEEN = 512;
 const SERVICE_ID = 'com.arthur.mapparty.offline';
 const VERIFICATION_EVENTS = new Set([
+  'connectionVerification',
   'verificationRequired',
   'connectionVerificationRequested',
   'verificationCompleted',
@@ -26,7 +27,11 @@ function cleanup(subscription) {
 function queueKey(item) {
   return item.type === 'emergency' && item.packet?.ciphertext
     ? `emergency:${item.packet.ciphertext}`
-    : item.type || 'message';
+    : item.type === 'location'
+      ? `location:${item.participantId || 'self'}`
+      : item.messageId
+        ? `${item.type || 'message'}:${item.messageId}`
+        : item.type || 'message';
 }
 
 function byteLength(value) {
@@ -59,6 +64,7 @@ function envelope(message, roomId) {
 
 export function createLocalTransport({ roomId, participantId, onMessage, onVerification, onStatus, onEvent } = {}) {
   let bridge = nativeBridge();
+  let currentParticipantId = participantId;
   let running = false;
   let unsubscribe;
   const queue = [];
@@ -115,7 +121,10 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
   async function flushQueue() {
     if (!bridge || !running || typeof bridge.send !== 'function') return;
     while (queue.length) {
-      try { await bridge.send(queue[0]); queue.shift(); } catch { break; }
+      try {
+        if (await bridge.send(queue[0]) !== true) break;
+        queue.shift();
+      } catch { break; }
     }
   }
 
@@ -131,7 +140,7 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
     }
     unsubscribe = subscribe();
     try {
-      await bridge.start({ roomId, participantId, serviceId: SERVICE_ID });
+      await bridge.start({ roomId, participantId: currentParticipantId, serviceId: SERVICE_ID });
       await flushQueue();
       onStatus?.('started');
     } catch (error) {
@@ -147,6 +156,17 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
     if (bridge) await bridge.stop();
   }
 
+  async function setIdentity(nextParticipantId) {
+    if (typeof nextParticipantId !== 'string' || !nextParticipantId.trim()) return false;
+    const next = nextParticipantId.trim();
+    if (next === currentParticipantId) return true;
+    currentParticipantId = next;
+    if (!running || !bridge) return true;
+    await bridge.stop();
+    await bridge.start({ roomId, participantId: currentParticipantId, serviceId: SERVICE_ID });
+    return true;
+  }
+
   async function send(message) {
     if (!message || typeof message !== 'object') return false;
     if (message.roomId && message.roomId !== roomId) return false;
@@ -154,8 +174,8 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
     if (!item) return false;
     if (bridge && running && typeof bridge.send === 'function') {
       try {
-        const delivered = await bridge.send(item);
-        if (delivered !== false) return true;
+        const accepted = await bridge.send(item);
+        if (accepted === true) return true;
       } catch { /* Keep it for reconnection. */ }
     }
     const queued = { ...item, queuedAt: Date.now() };
@@ -173,7 +193,7 @@ export function createLocalTransport({ roomId, participantId, onMessage, onVerif
 
   function takeQueue() { return queue.splice(0, queue.length); }
 
-  return { start, stop, send, verifyConnection, takeQueue, status, get running() { return running; } };
+  return { start, stop, setIdentity, send, verifyConnection, takeQueue, status, get running() { return running; } };
 }
 
 export function localTransportCapabilities() {
