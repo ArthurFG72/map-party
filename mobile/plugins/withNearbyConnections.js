@@ -3,6 +3,7 @@ const { withPodfile } = require('@expo/config-plugins');
 const REPOSITORY = 'https://github.com/google/nearby';
 const REVISION = 'aa71c5209b067b3238ff0462d479452f3eda9165';
 const PRODUCT = 'NearbyConnections';
+const MODULE_SEARCH_PATH = '$(BUILD_ROOT)/Intermediates.noindex/NearbyConnections.build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/NearbyConnections.build/Objects-normal/$(CURRENT_ARCH)';
 const PODFILE_MARKER = '# @generated begin map-party-nearby-pod-link';
 
 function ensurePodfile(contents) {
@@ -33,6 +34,12 @@ function ensurePodfile(contents) {
       build_file = pods_project.new(Xcodeproj::Project::Object::PBXBuildFile)
       build_file.product_ref = product
       transport_target.frameworks_build_phase.files << build_file
+    end
+    transport_target.build_configurations.each do |configuration|
+      paths = configuration.build_settings['SWIFT_INCLUDE_PATHS']
+      paths = paths.is_a?(Array) ? paths : paths.to_s.split(/\\s+/)
+      paths << '${MODULE_SEARCH_PATH}' unless paths.include?('${MODULE_SEARCH_PATH}')
+      configuration.build_settings['SWIFT_INCLUDE_PATHS'] = paths
     end
     pods_project.save
     # @generated end map-party-nearby-pod-link
