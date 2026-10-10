@@ -23,6 +23,10 @@ O workflow guarda `xcodebuild.log`, `prebuild-ios.log`, `Podfile`, `Podfile.lock
 - **Fallback do transporte tinha assinatura incompatível.** `send(json:)` agora mantém o contrato assíncrono `Bool` também quando Nearby não está disponível, evitando erros secundários pouco claros no `AsyncFunction`.
 - **Falha antes da compilação não tinha diagnóstico do projeto.** O script consulta a API autenticada do GitHub, mostra a anotação de criação do job e baixa os logs completos. Assim é possível distinguir cobrança/permissão/runner de dependências, prebuild e erros Swift.
 
+## Build validado
+
+Em 10/10/2026, o run [38082195145](https://github.com/ArthurFG72/map-party/actions/runs/38082195145) concluiu com sucesso os testes mobile, validação CocoaPods, geração do projeto e build nativo para `iphoneos`; o workflow empacotou o IPA. O artefato é unsigned, portanto precisa ser assinado para instalação/distribuição. A cópia baixada durante essa sessão está em `mobile/dist-ios-current/MapParty-ios-unsigned.ipa`.
+
 ## Ao alterar o app
 
 1. Mantenha os fontes e integrações iOS em `mobile/modules/**/ios` e nos config plugins iOS. Mudanças Android ficam em `mobile/android`; a compatibilidade funcional deve seguir os contratos mobile compartilhados.
