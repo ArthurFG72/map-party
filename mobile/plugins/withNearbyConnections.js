@@ -1,9 +1,9 @@
-const { withPodfile, withXcodeProject } = require('@expo/config-plugins');
+const { withPodfile } = require('@expo/config-plugins');
 
 const REPOSITORY = 'https://github.com/google/nearby';
 const REVISION = 'aa71c5209b067b3238ff0462d479452f3eda9165';
 const PRODUCT = 'NearbyConnections';
-const PODFILE_MARKER = '# @generated begin map-party-nearby-swift-module-path';
+const PODFILE_MARKER = '# @generated begin map-party-nearby-pod-link';
 
 function ensurePodfile(contents) {
   if (contents.includes(PODFILE_MARKER)) return contents;
@@ -13,77 +13,34 @@ function ensurePodfile(contents) {
 
   const hook = `
     ${PODFILE_MARKER}
-    installer.pods_project.targets.each do |target|
-      next unless target.name == 'MapPartyLocalTransport'
-      target.build_configurations.each do |configuration|
-        configured_paths = configuration.build_settings['SWIFT_INCLUDE_PATHS']
-        paths = configured_paths.is_a?(Array) ? configured_paths : configured_paths.to_s.split(/\\s+/)
-        paths << '$(BUILT_PRODUCTS_DIR)' unless paths.include?('$(BUILT_PRODUCTS_DIR)')
-        configuration.build_settings['SWIFT_INCLUDE_PATHS'] = paths
-      end
+    pods_project = installer.pods_project
+    transport_target = pods_project.targets.find { |target| target.name == 'MapPartyLocalTransport' }
+    raise 'MapPartyLocalTransport CocoaPods target not found while linking Nearby Connections.' unless transport_target
+
+    package = pods_project.root_object.package_references.find { |reference| reference.repositoryURL == '${REPOSITORY}' }
+    unless package
+      package = pods_project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+      package.repositoryURL = '${REPOSITORY}'
+      package.requirement = { 'kind' => 'revision', 'revision' => '${REVISION}' }
+      pods_project.root_object.package_references << package
     end
-    # @generated end map-party-nearby-swift-module-path
+
+    unless transport_target.package_product_dependencies.any? { |dependency| dependency.product_name == '${PRODUCT}' }
+      product = pods_project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+      product.package = package
+      product.product_name = '${PRODUCT}'
+      transport_target.package_product_dependencies << product
+      build_file = pods_project.new(Xcodeproj::Project::Object::PBXBuildFile)
+      build_file.product_ref = product
+      transport_target.frameworks_build_phase.files << build_file
+    end
+    pods_project.save
+    # @generated end map-party-nearby-pod-link
 `;
   return contents.replace(postInstallEnd, `${hook}${match[0]}`);
 }
 
-function findByComment(section, name) {
-  for (const key of Object.keys(section || {})) {
-    if (!key.endsWith('_comment') && section[`${key}_comment`] === name) return key;
-  }
-  return null;
-}
-
-function ensurePackage(project) {
-  const objects = project.hash.project.objects;
-  const projectSection = objects.PBXProject;
-  const firstProject = project.getFirstProject();
-  const projectUuid = firstProject.uuid;
-  const firstTarget = project.getFirstTarget();
-  const target = firstTarget?.firstTarget;
-  if (!target) throw new Error('Map Party iOS target not found while adding Nearby Connections.');
-
-  objects.XCRemoteSwiftPackageReference ||= {};
-  objects.XCSwiftPackageProductDependency ||= {};
-  const existingPackage = findByComment(objects.XCRemoteSwiftPackageReference, 'XCRemoteSwiftPackageReference "nearby"');
-  const packageUuid = existingPackage || project.generateUuid();
-  if (!existingPackage) {
-    objects.XCRemoteSwiftPackageReference[packageUuid] = {
-      isa: 'XCRemoteSwiftPackageReference',
-      repositoryURL: REPOSITORY,
-      requirement: { kind: 'revision', revision: REVISION }
-    };
-    objects.XCRemoteSwiftPackageReference[`${packageUuid}_comment`] = 'XCRemoteSwiftPackageReference "nearby"';
-  }
-
-  const productComment = `XCSwiftPackageProductDependency ${PRODUCT}`;
-  const existingProduct = findByComment(objects.XCSwiftPackageProductDependency, productComment);
-  const productUuid = existingProduct || project.generateUuid();
-  if (!existingProduct) {
-    objects.XCSwiftPackageProductDependency[productUuid] = {
-      isa: 'XCSwiftPackageProductDependency',
-      package: packageUuid,
-      productName: PRODUCT
-    };
-    objects.XCSwiftPackageProductDependency[`${productUuid}_comment`] = productComment;
-  }
-
-  const root = projectSection[projectUuid];
-  root.packageReferences ||= [];
-  if (!root.packageReferences.some(item => item.value === packageUuid)) {
-    root.packageReferences.push({ value: packageUuid, comment: `XCRemoteSwiftPackageReference "nearby"` });
-  }
-  target.packageProductDependencies ||= [];
-  if (!target.packageProductDependencies.some(item => item.value === productUuid)) {
-    target.packageProductDependencies.push({ value: productUuid, comment: productComment });
-  }
-}
-
 module.exports = function withNearbyConnections(config) {
-  config = withXcodeProject(config, config => {
-    ensurePackage(config.modResults);
-    return config;
-  });
   return withPodfile(config, config => {
     config.modResults.contents = ensurePodfile(config.modResults.contents);
     return config;

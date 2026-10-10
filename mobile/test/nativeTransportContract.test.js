@@ -53,9 +53,10 @@ test('iOS local transport links SPM modules into its CocoaPods target and isolat
   assert.match(location, /delegate: backgroundUploadDelegate/);
   assert.doesNotMatch(location, /extension MapPartyLocationModule: URLSessionTaskDelegate/);
   assert.match(nearbyPlugin, /withPodfile/);
-  assert.match(nearbyPlugin, /target\.name == 'MapPartyLocalTransport'/);
-  assert.match(nearbyPlugin, /SWIFT_INCLUDE_PATHS/);
-  assert.match(nearbyPlugin, /BUILT_PRODUCTS_DIR/);
+  assert.match(nearbyPlugin, /transport_target = pods_project\.targets\.find \{ \|target\| target\.name == 'MapPartyLocalTransport' \}/);
+  assert.match(nearbyPlugin, /XCRemoteSwiftPackageReference/);
+  assert.match(nearbyPlugin, /transport_target\.package_product_dependencies/);
+  assert.match(nearbyPlugin, /transport_target\.frameworks_build_phase\.files/);
 });
 
 test('native Android and iOS location producers expose authenticated recovery upload', async () => {
