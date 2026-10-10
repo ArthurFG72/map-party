@@ -3,7 +3,7 @@ const { withPodfile } = require('@expo/config-plugins');
 const REPOSITORY = 'https://github.com/google/nearby';
 const REVISION = 'aa71c5209b067b3238ff0462d479452f3eda9165';
 const PRODUCT = 'NearbyConnections';
-const MODULE_SEARCH_PATH = '$(BUILD_ROOT)/Intermediates.noindex/NearbyConnections.build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/NearbyConnections.build/Objects-normal/$(CURRENT_ARCH)';
+const MODULE_SEARCH_PATH = '$(OBJROOT)/NearbyConnections.build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/NearbyConnections.build/Objects-normal/$(CURRENT_ARCH)';
 const PODFILE_MARKER = '# @generated begin map-party-nearby-pod-link';
 
 function ensurePodfile(contents) {
