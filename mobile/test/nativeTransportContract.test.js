@@ -42,6 +42,17 @@ test('iOS release build requires Nearby and asks users to verify peer codes', as
   assert.match(siriIntents, /@AppShortcutsBuilder\s+static var appShortcuts: \[AppShortcut\]/);
 });
 
+test('iOS local transport links SPM modules into its CocoaPods target and isolates URLSession delegation', async () => {
+  const [podspec, location] = await Promise.all([
+    readFile(new URL('../modules/map-party-local-transport/ios/MapPartyLocalTransport.podspec', import.meta.url), 'utf8'),
+    readFile(new URL('../modules/map-party-local-transport/ios/MapPartyLocationModule.swift', import.meta.url), 'utf8')
+  ]);
+  assert.match(podspec, /SWIFT_INCLUDE_PATHS.*BUILT_PRODUCTS_DIR/);
+  assert.match(location, /MapPartyBackgroundUploadDelegate: NSObject, URLSessionTaskDelegate/);
+  assert.match(location, /delegate: backgroundUploadDelegate/);
+  assert.doesNotMatch(location, /extension MapPartyLocationModule: URLSessionTaskDelegate/);
+});
+
 test('native Android and iOS location producers expose authenticated recovery upload', async () => {
   const [android, ios] = await Promise.all([
     readFile(new URL('../android/app/src/main/java/com/arthur/mapparty/LocationForegroundService.kt', import.meta.url), 'utf8'),

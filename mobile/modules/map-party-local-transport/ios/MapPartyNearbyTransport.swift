@@ -99,7 +99,7 @@ final class MapPartyNearbyTransport: NSObject {
   }
 
   func stop() {}
-  func send(json: String) {}
+  func send(json: String) async -> Bool { false }
   func verify(endpointID: String, accepted: Bool) {}
 }
 #endif

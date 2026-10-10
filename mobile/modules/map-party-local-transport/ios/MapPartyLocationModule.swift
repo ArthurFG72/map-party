@@ -60,17 +60,30 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
   }
 }
 
+private final class MapPartyBackgroundUploadDelegate: NSObject, URLSessionTaskDelegate {
+  weak var owner: MapPartyLocationModule?
+
+  init(owner: MapPartyLocationModule) {
+    self.owner = owner
+  }
+
+  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    owner?.backgroundUploadDidComplete(task, error: error)
+  }
+}
+
 public final class MapPartyLocationModule: Module {
   private static let keychainService = "com.arthur.mapparty.background"
   private static let keychainAccount = "location-credential"
   private let delegate = MapPartyLocationDelegate()
   private var authorizationContinuation: CheckedContinuation<Bool, Never>?
+  private lazy var backgroundUploadDelegate = MapPartyBackgroundUploadDelegate(owner: self)
   private lazy var uploadSession: URLSession = {
     let configuration = URLSessionConfiguration.background(withIdentifier: "com.arthur.mapparty.location-upload")
     configuration.isDiscretionary = false
     configuration.sessionSendsLaunchEvents = true
     configuration.waitsForConnectivity = true
-    return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    return URLSession(configuration: configuration, delegate: backgroundUploadDelegate, delegateQueue: nil)
   }()
 
   public func definition() -> ModuleDefinition {
@@ -277,10 +290,8 @@ public final class MapPartyLocationModule: Module {
     @unknown default: return "unknown"
     }
   }
-}
 
-extension MapPartyLocationModule: URLSessionTaskDelegate {
-  public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+  fileprivate func backgroundUploadDidComplete(_ task: URLSessionTask, error: Error?) {
     guard error == nil,
           let response = task.response as? HTTPURLResponse,
           (200...299).contains(response.statusCode),

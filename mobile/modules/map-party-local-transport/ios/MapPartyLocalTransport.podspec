@@ -19,6 +19,7 @@ Pod::Spec.new do |s|
   s.source_files = '**/*.{h,m,mm,swift}'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'SWIFT_COMPILATION_MODE' => 'wholemodule'
+    'SWIFT_COMPILATION_MODE' => 'wholemodule',
+    'SWIFT_INCLUDE_PATHS' => '$(inherited) $(BUILT_PRODUCTS_DIR)'
   }
 end
