@@ -1,8 +1,31 @@
-const { withXcodeProject } = require('@expo/config-plugins');
+const { withPodfile, withXcodeProject } = require('@expo/config-plugins');
 
 const REPOSITORY = 'https://github.com/google/nearby';
 const REVISION = 'aa71c5209b067b3238ff0462d479452f3eda9165';
 const PRODUCT = 'NearbyConnections';
+const PODFILE_MARKER = '# @generated begin map-party-nearby-swift-module-path';
+
+function ensurePodfile(contents) {
+  if (contents.includes(PODFILE_MARKER)) return contents;
+  const postInstallEnd = /\r?\n  end\r?\nend\s*$/;
+  const match = contents.match(postInstallEnd);
+  if (!match) throw new Error('CocoaPods post_install block not found while linking Nearby Connections.');
+
+  const hook = `
+    ${PODFILE_MARKER}
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'MapPartyLocalTransport'
+      target.build_configurations.each do |configuration|
+        configured_paths = configuration.build_settings['SWIFT_INCLUDE_PATHS']
+        paths = configured_paths.is_a?(Array) ? configured_paths : configured_paths.to_s.split(/\\s+/)
+        paths << '$(BUILT_PRODUCTS_DIR)' unless paths.include?('$(BUILT_PRODUCTS_DIR)')
+        configuration.build_settings['SWIFT_INCLUDE_PATHS'] = paths
+      end
+    end
+    # @generated end map-party-nearby-swift-module-path
+`;
+  return contents.replace(postInstallEnd, `${hook}${match[0]}`);
+}
 
 function findByComment(section, name) {
   for (const key of Object.keys(section || {})) {
@@ -57,8 +80,14 @@ function ensurePackage(project) {
 }
 
 module.exports = function withNearbyConnections(config) {
-  return withXcodeProject(config, config => {
+  config = withXcodeProject(config, config => {
     ensurePackage(config.modResults);
     return config;
   });
+  return withPodfile(config, config => {
+    config.modResults.contents = ensurePodfile(config.modResults.contents);
+    return config;
+  });
 };
+
+module.exports.ensurePodfile = ensurePodfile;
