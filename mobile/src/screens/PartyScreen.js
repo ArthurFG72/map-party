@@ -369,6 +369,9 @@ export default function PartyScreen({ session, onLeave }) {
   // location.position. Otherwise accepting a shared route can evaluate
   // canReturnToOrigin while `location` is still in the temporal dead zone.
   const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || location.permissionSettled) party.startLocalTransport();
+  }, [location.permissionSettled, party.startLocalTransport]);
   useEffect(() => () => placeSearchControllerRef.current.cancel(), []);
   const categoryKey = activeCategories.join(',');
   // A temporary detour is stored locally first. The shared/personal route is

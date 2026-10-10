@@ -74,10 +74,23 @@ private final class MapPartyBackgroundUploadDelegate: NSObject, URLSessionTaskDe
 }
 
 public final class MapPartyLocationModule: Module {
+  private enum AuthorizationStage: Equatable {
+    case whenInUse
+    case always
+  }
+
+  private struct AuthorizationRequest {
+    let always: Bool
+    let continuation: CheckedContinuation<Bool, Never>
+  }
+
   private static let keychainService = "com.arthur.mapparty.background"
   private static let keychainAccount = "location-credential"
   private let delegate = MapPartyLocationDelegate()
-  private var authorizationContinuation: CheckedContinuation<Bool, Never>?
+  private var authorizationQueue: [AuthorizationRequest] = []
+  private var activeAuthorizationRequest: AuthorizationRequest?
+  private var authorizationStage: AuthorizationStage?
+  private var authorizationTimeout: DispatchWorkItem?
   private lazy var backgroundUploadDelegate = MapPartyBackgroundUploadDelegate(owner: self)
   private lazy var uploadSession: URLSession = {
     let configuration = URLSessionConfiguration.background(withIdentifier: "com.arthur.mapparty.location-upload")
@@ -273,35 +286,93 @@ public final class MapPartyLocationModule: Module {
   }
 
   fileprivate func authorizationChanged(_ status: CLAuthorizationStatus) {
-    guard status == .authorizedWhenInUse || status == .authorizedAlways || status == .denied || status == .restricted else { return }
-    let granted = status == .authorizedWhenInUse || status == .authorizedAlways
-    authorizationContinuation?.resume(returning: granted)
-    authorizationContinuation = nil
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { self.authorizationChanged(status) }
+      return
+    }
+    guard let request = activeAuthorizationRequest else {
+      processAuthorizationQueue()
+      return
+    }
+    switch status {
+    case .authorizedAlways:
+      finishAuthorization(true)
+    case .authorizedWhenInUse:
+      if authorizationStage == .whenInUse, request.always {
+        requestAlwaysAuthorization()
+      } else if authorizationStage == .whenInUse {
+        finishAuthorization(true)
+      } else if authorizationStage == .always {
+        // Foreground access is not equivalent to the requested background access.
+        finishAuthorization(false)
+      }
+    case .denied, .restricted:
+      finishAuthorization(false)
+    case .notDetermined:
+      break
+    @unknown default:
+      finishAuthorization(false)
+    }
   }
 
   private func requestAuthorization(always: Bool) async -> Bool {
-    let status = CLLocationManager.authorizationStatus()
-    if status == .authorizedAlways || (!always && status == .authorizedWhenInUse) { return true }
-    if status == .denied || status == .restricted { return false }
-    if always && status == .authorizedWhenInUse {
-      return await waitForAuthorization { self.delegate.manager.requestAlwaysAuthorization() }
-    }
-    if status == .notDetermined {
-      let granted = await waitForAuthorization { self.delegate.manager.requestWhenInUseAuthorization() }
-      if !always || !granted || CLLocationManager.authorizationStatus() != .authorizedWhenInUse { return granted }
-      return await waitForAuthorization { self.delegate.manager.requestAlwaysAuthorization() }
-    }
-    return false
-  }
-
-  private func waitForAuthorization(_ request: @escaping () -> Void) async -> Bool {
     await withCheckedContinuation { continuation in
-      authorizationContinuation = continuation
       DispatchQueue.main.async {
-        request()
-        self.authorizationChanged(CLLocationManager.authorizationStatus())
+        self.authorizationQueue.append(AuthorizationRequest(always: always, continuation: continuation))
+        self.processAuthorizationQueue()
       }
     }
+  }
+
+  private func processAuthorizationQueue() {
+    guard Thread.isMainThread, activeAuthorizationRequest == nil, !authorizationQueue.isEmpty else { return }
+    let request = authorizationQueue.removeFirst()
+    let status = delegate.manager.authorizationStatus
+    if status == .authorizedAlways || (!request.always && status == .authorizedWhenInUse) {
+      request.continuation.resume(returning: true)
+      processAuthorizationQueue()
+      return
+    }
+    guard status != .denied, status != .restricted else {
+      request.continuation.resume(returning: false)
+      processAuthorizationQueue()
+      return
+    }
+    activeAuthorizationRequest = request
+    if status == .notDetermined {
+      authorizationStage = .whenInUse
+      armAuthorizationTimeout()
+      delegate.manager.requestWhenInUseAuthorization()
+    } else if request.always && status == .authorizedWhenInUse {
+      requestAlwaysAuthorization()
+    } else {
+      finishAuthorization(false)
+    }
+  }
+
+  private func requestAlwaysAuthorization() {
+    guard activeAuthorizationRequest?.always == true else { return }
+    authorizationStage = .always
+    armAuthorizationTimeout()
+    delegate.manager.requestAlwaysAuthorization()
+  }
+
+  private func armAuthorizationTimeout() {
+    authorizationTimeout?.cancel()
+    let timeout = DispatchWorkItem { [weak self] in self?.finishAuthorization(false) }
+    authorizationTimeout = timeout
+    // A delayed iOS Always decision must not block Nearby startup indefinitely.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
+  }
+
+  private func finishAuthorization(_ granted: Bool) {
+    guard Thread.isMainThread, let request = activeAuthorizationRequest else { return }
+    authorizationTimeout?.cancel()
+    authorizationTimeout = nil
+    activeAuthorizationRequest = nil
+    authorizationStage = nil
+    request.continuation.resume(returning: granted)
+    processAuthorizationQueue()
   }
 
   private static func authorizationStatusName(_ status: CLAuthorizationStatus) -> String {

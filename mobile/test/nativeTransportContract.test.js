@@ -128,3 +128,34 @@ test('native Android and iOS location producers expose authenticated recovery up
   assert.match(android, /retryDelayMs/);
   assert.match(android, /postDelayed/);
 });
+
+test('iOS resolves location permission requests before starting Nearby', async () => {
+  const [party, screen, locationHook, locationModule, appConfig, nearby] = await Promise.all([
+    readFile(new URL('../src/hooks/useParty.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/screens/PartyScreen.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/hooks/useLocationSharing.ios.js', import.meta.url), 'utf8'),
+    readFile(new URL('../modules/map-party-local-transport/ios/MapPartyLocationModule.swift', import.meta.url), 'utf8'),
+    readFile(new URL('../app.json', import.meta.url), 'utf8'),
+    readFile(new URL('../modules/map-party-local-transport/ios/MapPartyNearbyTransport.swift', import.meta.url), 'utf8')
+  ]);
+  assert.doesNotMatch(party, /localTransport\.start\(\)/);
+  assert.match(party, /startLocalTransport = useCallback/);
+  assert.match(screen, /location\.permissionSettled\) party\.startLocalTransport\(\)/);
+  assert.match(locationHook, /await native\.requestBackgroundPermission\(\)/);
+  assert.match(locationHook, /permissionSettled/);
+  assert.match(locationModule, /authorizationQueue/);
+  assert.match(locationModule, /authorizationStage == \.always/);
+  assert.doesNotMatch(locationModule, /authorizationContinuation/);
+  const infoPlist = JSON.parse(appConfig).expo.ios.infoPlist;
+  for (const key of [
+    'NSLocationWhenInUseUsageDescription',
+    'NSLocationAlwaysAndWhenInUseUsageDescription',
+    'NSBluetoothAlwaysUsageDescription',
+    'NSBluetoothPeripheralUsageDescription',
+    'NSLocalNetworkUsageDescription'
+  ]) assert.ok(infoPlist[key], `Missing iOS permission description: ${key}`);
+  assert.ok(infoPlist.UIBackgroundModes.includes('location'));
+  assert.ok(infoPlist.UIBackgroundModes.includes('bluetooth-central'));
+  assert.ok(infoPlist.UIBackgroundModes.includes('bluetooth-peripheral'));
+  assert.match(nearby, /self\.roomID == roomID, self\.participantID == participantID/);
+});

@@ -10,14 +10,19 @@ const MAX_LOCATION_AGE_MS = 120_000;
 export function useLocationSharing({ enabled, roomId, shareLocation = true, mode = 'tracking', onLocation }) {
   const [position, setPosition] = useState(null);
   const [permissionGranted, setPermissionGranted] = useState(null);
+  const [permissionSettled, setPermissionSettled] = useState(false);
   const [status, setStatus] = useState('Localização pausada');
   const callback = useRef(onLocation);
   const positionRef = useRef(null);
   callback.current = onLocation;
 
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) {
+      setPermissionSettled(true);
+      return undefined;
+    }
     let mounted = true;
+    setPermissionSettled(false);
     // A mode transition must not carry the last tracking fix/speed into a
     // newly started navigation session.
     positionRef.current = null;
@@ -25,6 +30,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
     const native = requireOptionalNativeModule('MapPartyLocation');
     if (!native) {
       setPermissionGranted(null);
+      setPermissionSettled(true);
       setStatus('GPS nativo iOS indisponível nesta versão');
       return undefined;
     }
@@ -55,6 +61,7 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
         let authorizationStatus = null;
         try { authorizationStatus = await native.authorizationStatus?.(); } catch { /* Keep the generic status below. */ }
         setPermissionGranted(false);
+        setPermissionSettled(true);
         setStatus(`Permissão de localização negada no iOS${authorizationStatus ? ` (${authorizationStatus})` : ''}; abra os Ajustes`);
         return;
       }
@@ -64,12 +71,18 @@ export function useLocationSharing({ enabled, roomId, shareLocation = true, mode
       // authorization request; it must not block the first location fix.
       await native.start();
       await setActiveTrackingRoom(shareLocation ? roomId : null);
-      if (shareLocation) native.requestBackgroundPermission().catch(() => false);
+      // Resolve the CoreLocation prompts before Nearby can request Bluetooth.
+      if (shareLocation) await native.requestBackgroundPermission().catch(() => false);
+      if (mounted) setPermissionSettled(true);
       if (mounted) setStatus('Localização nativa ativa');
     }
-    start().catch((error) => mounted && setStatus(error?.message || 'Não foi possível iniciar o GPS nativo'));
+    start().catch((error) => {
+      if (!mounted) return;
+      setStatus(error?.message || 'Não foi possível iniciar o GPS nativo');
+      setPermissionSettled(true);
+    });
     return () => { mounted = false; subscription.remove(); errorSubscription?.remove?.(); setActiveTrackingRoom(null); native.stop?.().catch?.(() => undefined); };
   }, [enabled, mode, roomId, shareLocation]);
 
-  return { position, status, permissionGranted, openSettings: () => Linking.openSettings().catch(() => undefined) };
+  return { position, status, permissionGranted, permissionSettled, openSettings: () => Linking.openSettings().catch(() => undefined) };
 }

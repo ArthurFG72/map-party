@@ -25,6 +25,19 @@ O workflow guarda `xcodebuild.log`, `prebuild-ios.log`, `Podfile`, `Podfile.lock
 - **Fallback do transporte tinha assinatura incompatível.** `send(json:)` agora mantém o contrato assíncrono `Bool` também quando Nearby não está disponível, evitando erros secundários pouco claros no `AsyncFunction`.
 - **Falha antes da compilação não tinha diagnóstico do projeto.** O script consulta a API autenticada do GitHub, mostra a anotação de criação do job e baixa os logs completos. Assim é possível distinguir cobrança/permissão/runner de dependências, prebuild e erros Swift.
 
+## Correção do fluxo inicial de permissões iOS (10/10/2026)
+
+O relato de encerramento ao entrar no mapa ainda não tem um `.ips` do iPhone que confirme a pilha nativa. A revisão do fluxo encontrou uma condição concreta capaz de sobrepor solicitações do sistema: o Nearby iniciava na montagem da tela enquanto o CoreLocation solicitava localização em primeiro plano e, em seguida, acesso em segundo plano. Além disso, o módulo compartilhava uma única `CheckedContinuation` entre chamadas concorrentes e podia considerar `authorizedWhenInUse` como resposta positiva a um pedido de acesso `Always`.
+
+As correções mantêm o GPS e o transporte local:
+
+- No iOS, o Nearby só começa depois de o pedido de localização terminar, inclusive com negação, erro ou timeout de 20 segundos no pedido `Always`. O mapa e o GPS em primeiro plano continuam disponíveis enquanto isso.
+- Os pedidos CoreLocation agora são enfileirados na fila principal; cada chamada recebe uma resposta própria. `authorizedWhenInUse` não é confundido com `authorizedAlways`.
+- O start nativo do Nearby é idempotente para a mesma party e identidade; ao trocar de identidade ou parar, o transporte fecha os endpoints confiáveis antes de liberar os objetos.
+- As descrições de uso Bluetooth, rede local e localização estão no `mobile/app.json` com finalidade ligada às funções do app. O teste mobile verifica a presença dessas descrições e a ordem do fluxo.
+
+`npm test -w mobile` valida contratos e regressões JavaScript. A permissão real, a apresentação das folhas de sistema e a ausência de encerramento ainda exigem instalar e executar um build assinado em iPhone físico; o build unsigned não comprova esse comportamento. Se o app ainda fechar, recolher o relatório `.ips` antes de atribuir a causa ao Nearby.
+
 ## Build validado
 
 **Critério de sucesso:** o workflow produz apenas o IPA unsigned solicitado. Build e empacotamento não significam instalação ou validação funcional no iPhone. Não assine o artefato nem adicione credenciais Apple sem solicitação explícita. Um iPhone convencional exige app assinado e perfil de provisionamento para instalar/executar; portanto não prometa instalação direta sem assinatura. Não altere `CODE_SIGNING_ALLOWED=NO` para resolver prompts de instalação. A assinatura de distribuição permanece reservada para depois da aprovação total.

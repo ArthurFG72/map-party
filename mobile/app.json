@@ -13,7 +13,7 @@
       "infoPlist": {
         "NSLocationAlwaysAndWhenInUseUsageDescription": "O Map Party mantem sua rota atualizada em segundo plano.",
         "NSLocationWhenInUseUsageDescription": "O Map Party usa sua localização enquanto o app está aberto para mostrá-la aos participantes da party.",
-        "NSLocalNetworkUsageDescription": "O Map Party acessa o servidor de desenvolvimento na sua rede local.",
+        "NSLocalNetworkUsageDescription": "O Map Party usa a rede local para localizar e se comunicar com participantes próximos.",
         "NSBluetoothAlwaysUsageDescription": "O Map Party usa Bluetooth para retransmitir pedidos SOS próximos.",
         "NSBluetoothPeripheralUsageDescription": "O Map Party anuncia pedidos SOS para aparelhos próximos.",
         "UIBackgroundModes": [

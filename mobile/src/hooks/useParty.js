@@ -241,7 +241,6 @@ export function useParty(roomId, name, visible = true) {
       }
     } });
     localTransportRef.current = localTransport;
-    localTransport.start().catch(() => undefined);
     function join() {
       socket.timeout(5_000).emit('join-party', {
         contractVersion: CONTRACT_VERSION,
@@ -463,6 +462,10 @@ export function useParty(roomId, name, visible = true) {
     });
   }, [socket]);
 
+  const startLocalTransport = useCallback(() => {
+    localTransportRef.current?.start().catch(() => undefined);
+  }, []);
+
   const setRouteSharingConsent = useCallback((enabled) => new Promise((resolve, reject) => {
     const nextEnabled = Boolean(enabled);
     if (!socket.connected || !joinedRef.current) return reject(new Error('Sem conexao com a party.'));
@@ -628,6 +631,7 @@ export function useParty(roomId, name, visible = true) {
     locationSharingEnabled,
     error,
     sendLocation,
+    startLocalTransport,
     setLocationSharing,
     setVisibility,
     setRouteSharingConsent,

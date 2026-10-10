@@ -19,7 +19,9 @@ final class MapPartyNearbyTransport: NSObject {
   private var pendingVerifications: [EndpointID: (Bool) -> Void] = [:]
 
   func start(roomID: String, participantID: String) {
-    queue.async { guard !roomID.isEmpty, !participantID.isEmpty else { return }; self.stopLocked(); self.roomID = roomID; self.participantID = participantID
+    queue.async { guard !roomID.isEmpty, !participantID.isEmpty else { return }
+      if self.manager != nil, self.roomID == roomID, self.participantID == participantID { return }
+      self.stopLocked(); self.roomID = roomID; self.participantID = participantID
       let manager = ConnectionManager(serviceID: Self.serviceID, strategy: .cluster, queue: self.queue); manager.delegate = self; self.manager = manager
       let advertiser = Advertiser(connectionManager: manager); advertiser.delegate = self; advertiser.startAdvertising(using: self.contextData()); self.advertiser = advertiser
       let discoverer = Discoverer(connectionManager: manager); discoverer.delegate = self; discoverer.startDiscovery(); self.discoverer = discoverer; self.onPeer?(["state": "started"]) }
@@ -49,7 +51,7 @@ final class MapPartyNearbyTransport: NSObject {
     }
   }
   private func contextData() -> Data { (try? JSONSerialization.data(withJSONObject: ["room": roomID, "participant": participantID])) ?? Data() }
-  private func stopLocked() { pendingVerifications.values.forEach { $0(false) }; pendingVerifications.removeAll(); advertiser?.stopAdvertising(); discoverer?.stopDiscovery(); manager = nil; advertiser = nil; discoverer = nil; trusted.removeAll() }
+  private func stopLocked() { pendingVerifications.values.forEach { $0(false) }; pendingVerifications.removeAll(); advertiser?.stopAdvertising(); discoverer?.stopDiscovery(); trusted.forEach { manager?.disconnect(from: $0) }; manager = nil; advertiser = nil; discoverer = nil; trusted.removeAll() }
   @discardableResult private func remember(_ key: String) -> Bool { guard !seen.contains(key) else { return false }; seen.insert(key); seenOrder.append(key); if seenOrder.count > Self.dedupLimit { seen.remove(seenOrder.removeFirst()) }; return true }
   private func envelopeData(_ json: String) -> Data? { guard let data = json.data(using: .utf8), var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }; object["roomId"] = roomID; object["messageId"] = string(object["messageId"]) ?? UUID().uuidString; object["createdAt"] = number(object["createdAt"]) ?? Date().timeIntervalSince1970 * 1000; let expiry = Date().timeIntervalSince1970 * 1000 + Self.maxTTLSeconds * 1000; object["expiresAt"] = min(number(object["expiresAt"]) ?? expiry, expiry); object["hops"] = min(max(Int(number(object["hops"]) ?? 0), 0), Self.maxHops); guard let envelope = try? JSONSerialization.data(withJSONObject: object), envelope.count <= Self.maxEnvelopeBytes else { return nil }; return envelope }
   private func validEnvelope(_ data: Data) -> [String: Any]? {
