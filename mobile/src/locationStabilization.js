@@ -3,6 +3,11 @@ const MIN_STATIONARY_MOVEMENT = 8;
 const MAX_REALISTIC_SPEED = 90;
 const MIN_CONFIRMED_MOVEMENT_METERS = 2;
 
+export function hasUsableAccuracy(position, maximum = 60) {
+  const accuracy = position?.accuracy;
+  return Number.isFinite(accuracy) && accuracy >= 0 && accuracy <= maximum;
+}
+
 function distanceMeters(first, second) {
   const lat = (second.lat - first.lat) * Math.PI / 180;
   const lng = (second.lng - first.lng) * Math.PI / 180;

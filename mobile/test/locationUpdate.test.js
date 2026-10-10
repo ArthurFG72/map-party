@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocationUpdate } from '../src/locationUpdate.js';
-import { classifyMovement, stabilizePosition } from '../src/locationStabilization.js';
+import { classifyMovement, hasUsableAccuracy, stabilizePosition } from '../src/locationStabilization.js';
 
 test('usa o contrato de localização que o servidor valida no primeiro nível', () => {
   const update = createLocationUpdate({ lat: -23.55, lng: -46.63, accuracy: 8, timestamp: 123 }, 456);
@@ -38,6 +38,13 @@ test('descarta leitura GPS fora de ordem sem mover o marcador', () => {
     { lat: -23.5505, lng: -46.6305, accuracy: 8, timestamp: 1_000, speed: 20 }
   );
   assert.equal(stable, null);
+});
+
+test('a primeira marcação aceita somente fixes com precisão de GPS útil', () => {
+  assert.equal(hasUsableAccuracy({ accuracy: 60 }), true);
+  assert.equal(hasUsableAccuracy({ accuracy: 61 }), false);
+  assert.equal(hasUsableAccuracy({ accuracy: -1 }), false);
+  assert.equal(hasUsableAccuracy({ accuracy: Number.NaN }), false);
 });
 
 test('descarta salto quilométrico ao iniciar navegação com o aparelho parado', () => {

@@ -2,6 +2,7 @@ import ExpoModulesCore
 import CoreLocation
 import Foundation
 import Security
+import UIKit
 
 private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegate {
   weak var owner: MapPartyLocationModule?
@@ -15,8 +16,8 @@ private final class MapPartyLocationDelegate: NSObject, CLLocationManagerDelegat
     // fix and can turn horizontal GPS noise into visible phantom movement.
     // Use the native high-accuracy provider in tracking too; JS stabilization
     // still rejects implausible jumps before they reach the map.
-    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : (mode == "boat" ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters)
-    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 20)
+    manager.desiredAccuracy = mode == "navigation" ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+    manager.distanceFilter = mode == "navigation" ? 3 : (mode == "boat" ? 5 : 5)
     manager.pausesLocationUpdatesAutomatically = false
     manager.activityType = mode == "navigation" ? .automotiveNavigation : (mode == "boat" ? .otherNavigation : .other)
     manager.allowsBackgroundLocationUpdates = navigation || mode == "tracking"
@@ -164,7 +165,16 @@ public final class MapPartyLocationModule: Module {
       uploadBody["heading"] = location.course
     }
     sendEvent("onLocation", eventBody)
-    uploadLocation(uploadBody)
+    // Foreground positions must pass through the JS stabilizer before being
+    // shared. This native path exists only to keep sharing alive while iOS
+    // has suspended the JS runtime in the background.
+    let locationAge = Date().timeIntervalSince(location.timestamp)
+    if UIApplication.shared.applicationState == .background,
+       location.horizontalAccuracy <= 60,
+       locationAge >= -30,
+       locationAge <= 120 {
+      uploadLocation(uploadBody)
+    }
   }
 
   private func uploadLocation(_ body: [String: Any]) {
