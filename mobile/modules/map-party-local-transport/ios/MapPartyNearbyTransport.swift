@@ -76,8 +76,23 @@ extension MapPartyNearbyTransport: DiscovererDelegate {
 }
 extension MapPartyNearbyTransport: ConnectionManagerDelegate {
   func connectionManager(_ connectionManager: ConnectionManager, didReceive verificationCode: String, from endpointID: EndpointID, verificationHandler: @escaping (Bool) -> Void) { pendingVerifications[endpointID] = verificationHandler; onVerification?(["endpointId": endpointID, "authenticationToken": verificationCode]) }
-  func connectionManager(_ connectionManager: ConnectionManager, didReceive data: Data, withID payloadID: PayloadID, from endpointID: EndpointID) { guard trusted.contains(endpointID), var object = validEnvelope(data), let messageID = string(object["messageId"]), remember(messageID) else { return }; object["endpointId"] = endpointID; object["payloadId"] = String(payloadID); onMessage?(object); let hops = Int(number(object["hops"]) ?? 0); if hops < Self.maxHops { object["hops"] = hops + 1; if let relay = try? JSONSerialization.data(withJSONObject: object) { _ = connectionManager.send(relay, to: trusted.filter { $0 != endpointID }) } } }
+  func connectionManager(_ connectionManager: ConnectionManager, didReceive data: Data, withID payloadID: PayloadID, from endpointID: EndpointID) { receive(data, withID: payloadID, from: endpointID, using: connectionManager) }
+  func connectionManager(_ connectionManager: ConnectionManager, didReceive stream: InputStream, withID payloadID: PayloadID, from endpointID: EndpointID, cancellationToken token: CancellationToken) {
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable && data.count <= Self.maxEnvelopeBytes {
+      let capacity = min(buffer.count, Self.maxEnvelopeBytes + 1 - data.count)
+      let count = stream.read(&buffer, maxLength: capacity)
+      if count <= 0 { break }
+      data.append(contentsOf: buffer.prefix(count))
+    }
+    guard data.count <= Self.maxEnvelopeBytes else { return }
+    receive(data, withID: payloadID, from: endpointID, using: connectionManager)
+  }
   func connectionManager(_ connectionManager: ConnectionManager, didChangeTo state: ConnectionState, for endpointID: EndpointID) { let text = String(describing: state).lowercased(); if text.contains("connected") { trusted.insert(endpointID) }; if text.contains("disconnected") || text.contains("rejected") { trusted.remove(endpointID) }; onPeer?(["endpointId": endpointID, "state": text]) }
+  private func receive(_ data: Data, withID payloadID: PayloadID, from endpointID: EndpointID, using connectionManager: ConnectionManager) { guard trusted.contains(endpointID), var object = validEnvelope(data), let messageID = string(object["messageId"]), remember(messageID) else { return }; object["endpointId"] = endpointID; object["payloadId"] = String(payloadID); onMessage?(object); let hops = Int(number(object["hops"]) ?? 0); if hops < Self.maxHops { object["hops"] = hops + 1; if let relay = try? JSONSerialization.data(withJSONObject: object) { _ = connectionManager.send(relay, to: trusted.filter { $0 != endpointID }) } } }
 }
 #else
 #if MAP_PARTY_REQUIRE_NEARBY

@@ -43,9 +43,10 @@ test('iOS release build requires Nearby and asks users to verify peer codes', as
 });
 
 test('iOS local transport links SPM modules into its CocoaPods target and isolates URLSession delegation', async () => {
-  const [podspec, location, nearbyPlugin] = await Promise.all([
+  const [podspec, location, nearby, nearbyPlugin] = await Promise.all([
     readFile(new URL('../modules/map-party-local-transport/ios/MapPartyLocalTransport.podspec', import.meta.url), 'utf8'),
     readFile(new URL('../modules/map-party-local-transport/ios/MapPartyLocationModule.swift', import.meta.url), 'utf8'),
+    readFile(new URL('../modules/map-party-local-transport/ios/MapPartyNearbyTransport.swift', import.meta.url), 'utf8'),
     readFile(new URL('../plugins/withNearbyConnections.js', import.meta.url), 'utf8')
   ]);
   assert.match(podspec, /SWIFT_COMPILATION_MODE/);
@@ -58,6 +59,8 @@ test('iOS local transport links SPM modules into its CocoaPods target and isolat
   assert.match(nearbyPlugin, /transport_target\.package_product_dependencies/);
   assert.match(nearbyPlugin, /transport_target\.frameworks_build_phase\.files/);
   assert.match(nearbyPlugin, /\$\(OBJROOT\)\/NearbyConnections\.build\/\$\(CONFIGURATION\)\$\(EFFECTIVE_PLATFORM_NAME\)/);
+  assert.match(nearby, /didReceive stream: InputStream[\s\S]*cancellationToken token: CancellationToken/);
+  assert.match(nearby, /maxEnvelopeBytes \+ 1 - data\.count/);
 });
 
 test('native Android and iOS location producers expose authenticated recovery upload', async () => {
