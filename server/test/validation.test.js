@@ -53,6 +53,7 @@ test('aceita contrato legado e valida metadados versionados', () => {
   const legacy = cleanLocationUpdate({ lat: 1, lng: 2, accuracy: 3 });
   assert.equal(legacy.contractVersion, CONTRACT_VERSION);
   assert.equal(legacy.locationSequence, null);
+  assert.equal(cleanLocationUpdate({ contractVersion: CONTRACT_VERSION, lat: 1, lng: 2, accuracy: 3, forceBroadcast: true }).forceBroadcast, true);
   assert.equal(cleanLocationUpdate({ contractVersion: 999, lat: 1, lng: 2, accuracy: 3 }), null);
   assert.equal(cleanLocationUpdate({ contractVersion: CONTRACT_VERSION, locationSequence: -1, lat: 1, lng: 2, accuracy: 3 }), null);
 });

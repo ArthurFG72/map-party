@@ -3,8 +3,11 @@ import { CONTRACT_VERSION } from './contracts';
 
 async function requestJson(path, options = {}) {
   const controller = new AbortController();
-  const { timeoutMs = 12_000, ...fetchOptions } = options;
+  const { timeoutMs = 12_000, signal: requestSignal, ...fetchOptions } = options;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromRequest = () => controller.abort();
+  if (requestSignal?.aborted) controller.abort();
+  else requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
   try {
     const response = await fetch(`${SERVER_URL}${path}`, {
       ...fetchOptions,
@@ -15,11 +18,13 @@ async function requestJson(path, options = {}) {
     if (!response.ok) throw new Error(body?.error?.message || `Falha no servidor (${response.status}).`);
     return body;
   } catch (error) {
+    if (requestSignal?.aborted) throw error;
     if (error.name === 'AbortError') throw new Error('A solicitação excedeu o tempo limite.');
     if (error instanceof TypeError) throw new Error(`Não foi possível acessar ${SERVER_URL}.`);
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    requestSignal?.removeEventListener('abort', abortFromRequest);
   }
 }
 
@@ -31,14 +36,14 @@ function distanceBetween(first, second) {
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function searchGooglePlaces(query, location, limit = 12) {
+async function searchGooglePlaces(query, location, limit = 12, signal) {
   if (!GOOGLE_MAPS_API_KEY) return [];
   const params = new URLSearchParams({ query: query.trim(), key: GOOGLE_MAPS_API_KEY });
   if (location && Number.isFinite(location.lat) && Number.isFinite(location.lng)) {
     params.set('location', `${location.lat},${location.lng}`);
     params.set('radius', '50000');
   }
-  const response = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`);
+  const response = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`, { signal });
   const body = await response.json().catch(() => null);
   if (!response.ok || (body?.status && !['OK', 'ZERO_RESULTS'].includes(body.status))) return [];
   return (body?.results || []).slice(0, limit).map((item) => {
@@ -52,7 +57,7 @@ async function searchGooglePlaces(query, location, limit = 12) {
   }).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
 }
 
-export async function searchPlaces(query, region, location) {
+export async function searchPlaces(query, region, location, { signal } = {}) {
   const localRegion = location && Number.isFinite(location.lat) && Number.isFinite(location.lng)
     && (!region || region.latitudeDelta > 0.6 || region.longitudeDelta > 0.6)
     ? { latitude: location.lat, longitude: location.lng, latitudeDelta: 0.35, longitudeDelta: 0.35 }
@@ -78,14 +83,15 @@ export async function searchPlaces(query, region, location) {
     ? [originalQuery, simplifiedQuery]
     : [originalQuery];
   try {
-    let body = await requestJson(`/api/geocode?${buildParams(queries[0])}`);
-    if (!(body.results || []).length && queries[1]) body = await requestJson(`/api/geocode?${buildParams(queries[1])}`);
+    let body = await requestJson(`/api/geocode?${buildParams(queries[0])}`, { signal });
+    if (!(body.results || []).length && queries[1]) body = await requestJson(`/api/geocode?${buildParams(queries[1])}`, { signal });
     if ((body.results || []).length || !GOOGLE_MAPS_API_KEY) return body;
-    const googleResults = await searchGooglePlaces(query, location);
+    const googleResults = await searchGooglePlaces(query, location, 12, signal);
     return { ...body, results: googleResults, attribution: 'Google Places' };
   } catch (error) {
+    if (signal?.aborted) throw error;
     if (!GOOGLE_MAPS_API_KEY) throw error;
-    const googleResults = await searchGooglePlaces(query, location);
+    const googleResults = await searchGooglePlaces(query, location, 12, signal);
     if (googleResults.length) return { results: googleResults, attribution: 'Google Places' };
     throw error;
   }
@@ -104,7 +110,7 @@ export function searchPois(region, categories) {
   return requestJson(`/api/pois?${params}`);
 }
 
-export function searchNearbyPois(location, categories = ['fuel'], radiusMeters = 5000) {
+export function searchNearbyPois(location, categories = ['fuel'], radiusMeters = 5000, { signal } = {}) {
   if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
     throw new Error('Aguardando uma posição do GPS.');
   }
@@ -115,7 +121,7 @@ export function searchNearbyPois(location, categories = ['fuel'], radiusMeters =
     categories: categories.join(','),
     limit: '5'
   });
-  return requestJson(`/api/pois?${params}`);
+  return requestJson(`/api/pois?${params}`, { signal });
 }
 
 export function calculateRoute(origin, destination, profile = 'driving') {

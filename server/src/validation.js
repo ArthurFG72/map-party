@@ -101,7 +101,7 @@ export function cleanLocationUpdate(value, options) {
   if (!location) return null;
   const locationSequence = value.locationSequence == null ? null : cleanLocationSequence(value.locationSequence);
   if (value.locationSequence != null && locationSequence == null) return null;
-  return { contractVersion: CONTRACT_VERSION, location, locationSequence };
+  return { contractVersion: CONTRACT_VERSION, location, locationSequence, forceBroadcast: value.forceBroadcast === true };
 }
 
 export function cleanPoint(value) {

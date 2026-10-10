@@ -4,7 +4,6 @@ import { PartyStore } from './partyStore.js';
 import { createRouteService } from './services/routeService.js';
 
 const LOCATION_RATE = { windowMs: 60_000, max: 30 };
-const MIN_LOCATION_BROADCAST_METERS = 3;
 const ROUTE_RATE = { windowMs: 60_000, max: 10 };
 const AGUIA_GLOBAL_ROOM = 'global';
 
@@ -20,14 +19,6 @@ function allowed(timestamps, { windowMs, max }) {
   return true;
 }
 
-function locationDistanceMeters(first, second) {
-  if (!first || !second) return Number.POSITIVE_INFINITY;
-  const latitude = (second.lat - first.lat) * Math.PI / 180;
-  const longitude = (second.lng - first.lng) * Math.PI / 180;
-  const a = Math.sin(latitude / 2) ** 2
-    + Math.cos(first.lat * Math.PI / 180) * Math.cos(second.lat * Math.PI / 180) * Math.sin(longitude / 2) ** 2;
-  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 function personalEta(participantId, route, locationTimestamp) {
   return {
     participantId,
@@ -80,7 +71,9 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       if (previous && previous !== roomId) socket.leave(previous);
       socket.join(roomId);
       socket.data.deviceId = deviceId || null;
-      const deviceCredential = deviceId && participantToken && deviceAuth ? deviceAuth.issue({ deviceId, participantToken }) : null;
+      const deviceCredential = deviceId && participantToken && deviceAuth
+        ? deviceAuth.issue({ deviceId, participantToken, roomId, participantId: joined.participant.id })
+        : null;
       const snapshot = versioned(store.snapshot(roomId, joined.participant.id));
       if (typeof ack === 'function') ack(versioned({ ok: true, participantId: joined.participant.id, snapshot, ...(deviceCredential ? { deviceCredential } : {}) }));
       emitPartySnapshots(io, store, roomId);
@@ -191,30 +184,19 @@ export function registerSocketHandlers(io, store = new PartyStore(), {
       const membership = store.roomFor(socket.id);
       const update = cleanLocationUpdate(payload);
       if (!membership || !update) return reject(ack, 'Localização inválida ou participante fora da party.');
-      const { locationSequence } = update;
-      const previousSequence = store.locationSequence(socket.id);
-      if (locationSequence != null && previousSequence != null && locationSequence <= previousSequence) {
-        if (typeof ack === 'function') ack(versioned({ ok: true, duplicate: true, locationSequence: previousSequence }));
-        return;
-      }
-      const serverReceivedAt = Date.now();
-      const location = { ...update.location, serverReceivedAt };
-      const participant = membership.room.participants.get(membership.participantId);
-      if (participant.visible === false) {
-        if (typeof ack === 'function') ack(versioned({ ok: true, paused: true, locationSequence: previousSequence }));
-        return;
-      }
       if (!allowed(rate.location, LOCATION_RATE)) return reject(ack, 'Muitas atualizações de localização. Aguarde um momento.');
+      const result = store.updateLocation(membership.roomId, membership.participantId, update);
+      if (!result) return reject(ack, 'invalid-location');
+      if (result.duplicate || result.paused) {
+        if (typeof ack === 'function') ack(versioned({ ok: true, ...(result.duplicate ? { duplicate: true } : { paused: true }), locationSequence: result.locationSequence }));
+        return;
+      }
+      const { location, locationSequence } = result;
       trafficStore?.observe(location);
-      const previousLocation = participant.location;
-      participant.location = location;
-      store.setLocationSequence(socket.id, locationSequence);
-      const elapsed = previousLocation ? serverReceivedAt - Number(previousLocation.serverReceivedAt || 0) : Number.POSITIVE_INFINITY;
-      const moved = previousLocation ? locationDistanceMeters(previousLocation, location) : Number.POSITIVE_INFINITY;
-      if (moved >= MIN_LOCATION_BROADCAST_METERS || elapsed >= 10_000) {
+      if (result.broadcast) {
         socket.to(membership.roomId).emit('participant-location', versioned({ participantId: membership.participantId, location, locationSequence }));
       }
-      if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence, ...(moved < MIN_LOCATION_BROADCAST_METERS && elapsed < 10_000 ? { unchanged: true } : {}) }));
+      if (typeof ack === 'function') ack(versioned({ ok: true, locationSequence, ...(!result.broadcast ? { unchanged: true } : {}) }));
     });
 
     socket.on('publish-exploration-track', (payload, ack) => {

@@ -6,6 +6,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { SERVER_URL } from '../config';
 import { CONTRACT_VERSION, createCommandId } from '../contracts';
 import { createLocationUpdate } from '../locationUpdate';
+import { attemptEmergencyDelivery } from '../sosDelivery';
 import { getOrCreateDeviceId, getOrCreateParticipantToken, loadPartySnapshot, recordDiagnosticEvent, savePartySnapshot, savePendingLocation, takePendingLocation } from '../offlineStore';
 import { routeFromNavigationRerouted } from '../partyNavigation';
 import { createLocalTransport } from '../localTransport';
@@ -555,18 +556,21 @@ export function useParty(roomId, name, visible = true) {
     pendingSosRef.current.set(messageId, new Set());
     setSosDelivery({ messageId, participants: [] });
     const location = packet?.location || options.location || null;
-    await localTransportRef.current?.send({ type: 'emergency', messageId, participantId: participantIdRef.current, participantName: name, message, location, packet });
-    if (!socket.connected || !joinedRef.current) return { relayed: false, signalSent: false, messageId };
-
-    const signal = await new Promise((resolve, reject) => {
-      socket.timeout(5_000).emit('send-sos-signal', { messageId, message, location }, (timeoutError, reply) => {
-        if (timeoutError) return reject(new Error('O servidor nao confirmou o SOS.'));
-        if (!reply?.ok) return reject(new Error(reply?.error || 'O servidor rejeitou o SOS.'));
-        resolve(reply);
-      });
+    const result = await attemptEmergencyDelivery({
+      online: socket.connected && joinedRef.current,
+      sendLocal: () => localTransportRef.current
+        ? localTransportRef.current.send({ type: 'emergency', messageId, participantId: participantIdRef.current, participantName: name, message, location, packet })
+        : false,
+      sendSignal: () => new Promise((resolve, reject) => {
+        socket.timeout(5_000).emit('send-sos-signal', { messageId, message, location }, (timeoutError, reply) => {
+          if (timeoutError) return reject(new Error('O servidor nao confirmou o SOS.'));
+          if (!reply?.ok) return reject(new Error(reply?.error || 'O servidor rejeitou o SOS.'));
+          resolve(reply);
+        });
+      }),
+      relay: () => relayEmergencyPacket(packet)
     });
-    const relay = await relayEmergencyPacket(packet).catch(() => ({ relayed: false }));
-    return { ...relay, signalSent: signal.ok === true, relayed: relay.relayed !== false, messageId };
+    return { ...result, messageId };
   }, [name, socket]);
 
   const sendDirectMessage = useCallback((targetParticipantId, text) => new Promise((resolve, reject) => {

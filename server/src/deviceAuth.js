@@ -25,10 +25,18 @@ export function createDeviceAuth({ secret, now = () => Date.now(), ttlMs = 24 * 
   }
   if (!Number.isFinite(ttlMs) || ttlMs < 60_000) throw new Error('Device token TTL is invalid.');
 
-  function issue({ deviceId, participantToken }) {
+  function issue({ deviceId, participantToken, roomId = null, participantId = null }) {
     if (typeof deviceId !== 'string' || typeof participantToken !== 'string' || !participantToken) return null;
     const issuedAt = now();
-    const payload = { v: TOKEN_VERSION, did: deviceId, sub: ownerId(participantToken), iat: issuedAt, exp: issuedAt + ttlMs };
+    const payload = {
+      v: TOKEN_VERSION,
+      did: deviceId,
+      sub: ownerId(participantToken),
+      ...(typeof roomId === 'string' && roomId ? { rid: roomId } : {}),
+      ...(typeof participantId === 'string' && participantId ? { pid: participantId } : {}),
+      iat: issuedAt,
+      exp: issuedAt + ttlMs
+    };
     const encoded = base64url(JSON.stringify(payload));
     return `${encoded}.${signature(secret, encoded)}`;
   }

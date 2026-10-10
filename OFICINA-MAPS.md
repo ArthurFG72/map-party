@@ -30,6 +30,10 @@ operacional sem expor essa diferença ao usuário.
 | Crivo — Alternativas | revisão de decisões e riscos | recomendação |
 | Anchor — Confiabilidade | preflight, manifests, systemd e rollback | gate de release |
 
+Para uma consulta multiassistente, usar `npm run assist:research -- "pergunta"`.
+O comando consulta somente provedores configurados, aplica timeout/retries e
+passa as respostas disponíveis pelo JEV/TypeSafe; ele nunca altera código.
+
 ## Ordem de trabalho
 
 1. Reproduzir o erro com um teste mínimo.

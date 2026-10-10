@@ -24,6 +24,8 @@ import { createAdapterAuth } from './adapterAuth.js';
 import { createOfflineGraphService } from './services/offlineGraphService.js';
 import { createGeminiAssistant } from './services/geminiAssistantService.js';
 import { assistantRouter } from './routes/assistant.js';
+import { cleanDeviceId, cleanLocationUpdate, cleanRoomId } from './validation.js';
+import { versioned } from './contracts.js';
 
 export const MAP_TILE_STYLES = Object.freeze({
   simple: 'https://tile.openstreetmap.org',
@@ -138,6 +140,11 @@ function normalizeOrigins(origin) {
   return (Array.isArray(origin) ? origin : String(origin).split(','))
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function bearerToken(header) {
+  const match = typeof header === 'string' ? /^Bearer\s+(.+)$/i.exec(header) : null;
+  return match?.[1] || null;
 }
 
 function buildContentSecurityPolicy() {
@@ -370,6 +377,29 @@ export function createApp({
     deviceAuth,
     recordCommandResult: rememberCommandResult,
     requireDeviceAuth: production
+  });
+  app.post('/api/party/:roomId/location', limiter, (req, res) => {
+    const roomId = cleanRoomId(req.params.roomId);
+    const deviceId = cleanDeviceId(req.headers['x-device-id'] || req.body?.device_id);
+    const credential = deviceAuth.authorizes(bearerToken(req.headers.authorization), deviceId);
+    const update = cleanLocationUpdate(req.body);
+    if (!roomId || !deviceId || !credential || credential.rid !== roomId || !credential.pid || !update) {
+      return res.status(401).json({ ok: false, code: 'UNAUTHORIZED_LOCATION' });
+    }
+    const result = store.updateLocation(roomId, credential.pid, update);
+    if (!result) return res.status(404).json({ ok: false, code: 'PARTICIPANT_NOT_FOUND' });
+    if (result.duplicate || result.paused) {
+      return res.json({ ok: true, ...(result.duplicate ? { duplicate: true } : { paused: true }), locationSequence: result.locationSequence });
+    }
+    resolvedTrafficStore.observe(result.location);
+    if (result.broadcast) {
+      for (const sockets of result.room.participantSockets.values()) {
+        for (const socketId of sockets) {
+          io.to(socketId).emit('participant-location', versioned({ participantId: credential.pid, location: result.location, locationSequence: result.locationSequence }));
+        }
+      }
+    }
+    return res.json({ ok: true, locationSequence: result.locationSequence, ...(!result.broadcast ? { unchanged: true } : {}) });
   });
   return { app, httpServer, io, store };
 }

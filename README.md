@@ -94,7 +94,9 @@ HTTPS é obrigatório para a geolocalização em um iPhone físico. Um endereço
 
 Esta versão permanece disponível como alternativa, mas não é o aplicativo React Native presente em `mobile/`.
 
-### Modo offline no Expo Go
+### Modo offline no build nativo
+
+Expo Go nÃ£o Ã© um alvo para Nearby, localizaÃ§Ã£o em segundo plano ou upload nativo. Esses recursos exigem APK/development build no Android e IPA/TestFlight no iOS; a fila JavaScript permanece somente como fallback.
 
 Na versao mobile atual, uma rota calculada com conexao gera um pacote offline
 compacto em SQLite, com corredor limitado, geometria, tiles da rota e grafo

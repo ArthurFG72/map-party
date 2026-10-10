@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { io as createClient } from 'socket.io-client';
 import { constants, generateKeyPairSync, publicEncrypt } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { createApp, grayscalePng, MAP_TILE_STYLES } from '../src/app.js';
@@ -23,8 +24,16 @@ function pngChunk(type, data) {
 async function startServer(options) {
   const instance = createApp({ origin: '*', restRateLimit: (_req, _res, next) => next(), ...options });
   await new Promise((resolve) => instance.httpServer.listen(0, '127.0.0.1', resolve));
-  return { ...instance, url: `http://127.0.0.1:${instance.httpServer.address().port}` };
+  const port = instance.httpServer.address().port;
+  const connect = () => new Promise((resolve, reject) => {
+    const socket = createClient(`http://127.0.0.1:${port}`, { transports: ['websocket'], forceNew: true });
+    socket.once('connect', () => resolve(socket));
+    socket.once('connect_error', (error) => { socket.disconnect(); reject(error); });
+  });
+  return { ...instance, url: `http://127.0.0.1:${port}`, connect };
 }
+
+const emitAck = (socket, event, payload) => new Promise((resolve) => socket.emit(event, payload, resolve));
 
 test('estilos de mapa permanecem estáveis e não expõem chave de provedor', async (t) => {
   assert.deepEqual(MAP_TILE_STYLES, {
@@ -74,6 +83,37 @@ test('endpoints REST expõem geocodificação e cálculo de rota', async (t) => 
   });
   assert.equal(route.status, 200);
   assert.equal((await route.json()).distance, 42);
+});
+
+test('upload nativo de localizacao aceita credencial do dispositivo e preserva sequencia', async (t) => {
+  const server = await startServer();
+  const client = await server.connect();
+  t.after(async () => { client.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  const deviceId = 'nav_0123456789abcdef';
+  const participantToken = 'p'.repeat(32);
+  const joined = await emitAck(client, 'join-party', {
+    contractVersion: 1, roomId: 'native-upload-1', name: 'Android', participantToken, deviceId
+  });
+  assert.equal(joined.ok, true);
+  assert.ok(joined.deviceCredential);
+  const headers = {
+    Authorization: `Bearer ${joined.deviceCredential}`,
+    'X-Device-ID': deviceId,
+    'Content-Type': 'application/json'
+  };
+  const first = await fetch(`${server.url}/api/party/native-upload-1/location`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ contractVersion: 1, locationSequence: 1, lat: -23.5, lng: -46.6, accuracy: 6, timestamp: Date.now(), forceBroadcast: true })
+  });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).locationSequence, 1);
+  const duplicate = await fetch(`${server.url}/api/party/native-upload-1/location`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ contractVersion: 1, locationSequence: 1, lat: -23.6, lng: -46.7, accuracy: 6, timestamp: Date.now(), forceBroadcast: true })
+  });
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).duplicate, true);
+  assert.equal(server.store.rooms.get('native-upload-1').participants.get(joined.participantId).location.lat, -23.5);
 });
 
 test('respostas HTTP restringem permissões sensíveis do navegador', async (t) => {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { createRequestController } from '../src/requestController.js';
 
 test('Android and iOS native transports keep the same bounded envelope contract', async () => {
   const [android, ios] = await Promise.all([
@@ -17,6 +18,32 @@ test('Android and iOS native transports keep the same bounded envelope contract'
   assert.match(ios, /maxTTLSeconds:\s*TimeInterval\s*=\s*180/);
   assert.match(ios, /envelope\.count\s*<=\s*Self\.maxEnvelopeBytes/);
   assert.match(ios, /continuation\.resume\(returning: error == nil\)/);
+});
+
+test('cancelling or replacing an address search aborts it without clearing newer results', () => {
+  const requests = createRequestController();
+  const first = requests.begin();
+  const second = requests.begin();
+  assert.equal(first.signal.aborted, true);
+  assert.equal(requests.isCurrent(first), false);
+  assert.equal(requests.isCurrent(second), true);
+  assert.equal(requests.finish(first), false);
+  assert.equal(requests.cancel(), true);
+  assert.equal(second.signal.aborted, true);
+  assert.equal(requests.isCurrent(second), false);
+  assert.equal(requests.cancel(), false);
+});
+
+test('address and detour searches pass cancellation through to network requests', async () => {
+  const [api, screen] = await Promise.all([
+    readFile(new URL('../src/api.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/screens/PartyScreen.js', import.meta.url), 'utf8')
+  ]);
+  assert.match(api, /requestSignal\?\.addEventListener\('abort', abortFromRequest/);
+  assert.match(api, /searchPlaces\(query, region, location, \{ signal \} = \{\}\)/);
+  assert.match(api, /fetch\(`https:\/\/maps\.googleapis\.com[^\n]+\{ signal \}\)/);
+  assert.match(screen, /cancelPlaceSearchRequest\(\);\s*searchInputRef\.current\?\.blur\(\);[\s\S]*?setMessage\('Busca de desvio cancelada/);
+  assert.match(screen, /onChangeText=\{\(value\) => \{ cancelPlaceSearchRequest\(\); setQuery\(value\); setResults\(\[\]\); \}\}/);
 });
 
 test('iOS release build requires Nearby and asks users to verify peer codes', async () => {

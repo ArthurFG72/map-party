@@ -88,6 +88,22 @@ test('Socket.io rejeita origem fora da allowlist', async (t) => {
   );
 });
 
+test('força a retransmissão da posição atual mesmo sem deslocamento', async (t) => {
+  const server = await startServer();
+  const ana = await server.connect(); const bia = await server.connect();
+  t.after(async () => { ana.disconnect(); bia.disconnect(); await new Promise((resolve) => server.io.close(resolve)); });
+  const joinedAna = await emitAck(ana, 'join-party', { roomId: 'location-force-1', name: 'Ana' });
+  await emitAck(bia, 'join-party', { roomId: 'location-force-1', name: 'Bia' });
+  const location = { contractVersion: 1, locationSequence: 1, lat: -23.5, lng: -46.6, accuracy: 5, timestamp: Date.now() };
+  await emitAck(ana, 'send-location', location);
+  const eventPromise = once(bia, 'participant-location');
+  const reply = await emitAck(ana, 'send-location', { ...location, locationSequence: 2, forceBroadcast: true });
+  const event = await eventPromise;
+  assert.equal(reply.ok, true);
+  assert.equal(event.participantId, joinedAna.participantId);
+  assert.equal(event.location.lat, location.lat);
+});
+
 test('rota sincroniza somente após join e payload válido', async (t) => {
   const server = await startServer();
   const client = await server.connect();

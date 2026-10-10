@@ -14,6 +14,7 @@
     "iphone": "npm run build && npm start",
     "mobile": "npm run start -w mobile",
     "mobile:check": "npm run check -w mobile",
+    "assist:research": "node scripts/assistant-research.mjs",
     "build": "npm run build -w client",
     "test": "npm run test -w server",
     "postinstall": "patch-package"

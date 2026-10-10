@@ -4,6 +4,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-nati
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { askAssistant, calculateRoute, fetchEmergencyPublicKey, prepareOfflineGraph, reportRoutePerformance, searchNearbyPois, searchPlaces, searchPois } from '../api';
 import { createSealedEmergencyPacket } from '../emergencyPacket';
+import { createRequestController } from '../requestController';
 import { useLocationSharing } from '../hooks/useLocationSharing';
 import { useParty } from '../hooks/useParty';
 import { buildNavigationGuidance, distanceMeters } from '../navigationGuidance';
@@ -258,6 +259,7 @@ function combineDetourRoutes(firstLeg, secondLeg, originalRoute, stop) {
 export default function PartyScreen({ session, onLeave }) {
   const mapRef = useRef(null);
   const searchInputRef = useRef(null);
+  const placeSearchControllerRef = useRef(createRequestController());
   const viewport = useWindowDimensions();
   const party = useParty(session.roomId, session.name, session.visible !== false);
 
@@ -367,6 +369,7 @@ export default function PartyScreen({ session, onLeave }) {
   // location.position. Otherwise accepting a shared route can evaluate
   // canReturnToOrigin while `location` is still in the temporal dead zone.
   const location = useLocationSharing({ enabled: true, mode: navigationActive ? 'navigation' : 'tracking', roomId: session.roomId, shareLocation: party.locationSharingEnabled, onLocation: party.sendLocation });
+  useEffect(() => () => placeSearchControllerRef.current.cancel(), []);
   const categoryKey = activeCategories.join(',');
   // A temporary detour is stored locally first. The shared/personal route is
   // the original route and must not overwrite the active detour on rerender.
@@ -1183,6 +1186,25 @@ export default function PartyScreen({ session, onLeave }) {
     void setPoint(kind, point);
   }
 
+  function beginPlaceSearch() {
+    return placeSearchControllerRef.current.begin();
+  }
+
+  function finishPlaceSearch(controller) {
+    if (placeSearchControllerRef.current.finish(controller)) setLoading(false);
+  }
+
+  function cancelPlaceSearchRequest() {
+    if (placeSearchControllerRef.current.cancel()) setLoading(false);
+  }
+
+  function clearPlaceSearch() {
+    cancelPlaceSearchRequest();
+    setQuery('');
+    setResults([]);
+    setShowSavedPlaces(true);
+  }
+
   async function search() {
     searchInputRef.current?.blur();
     Keyboard.dismiss();
@@ -1190,18 +1212,20 @@ export default function PartyScreen({ session, onLeave }) {
     if (!party.connectivity.capabilities.canSearch) return setMessage('A conexão está limitada. A busca será liberada quando a rede melhorar.');
     if (query.trim().length < 3) return setMessage('Digite pelo menos 3 caracteres.');
     if (isFuelSearch(query) && !searchLocation) return setMessage('Aguardando a posição atual do GPS para buscar postos próximos.');
+    const controller = beginPlaceSearch();
     setLoading(true);
     setMessage('Buscando…');
     try {
       const body = isFuelSearch(query)
-        ? await searchNearbyPois(searchLocation, ['fuel'], 5000)
-        : await searchPlaces(query, visibleRegion, searchLocation);
+        ? await searchNearbyPois(searchLocation, ['fuel'], 5000, { signal: controller.signal })
+        : await searchPlaces(query, visibleRegion, searchLocation, { signal: controller.signal });
+      if (!placeSearchControllerRef.current.isCurrent(controller)) return;
       setResults(body.results || []);
       setMessage(body.results?.length ? locationWarning(body.results) : 'Nenhum lugar encontrado.');
     } catch (error) {
-      setMessage(error.message);
+      if (placeSearchControllerRef.current.isCurrent(controller) && error.name !== 'AbortError') setMessage(error.message);
     } finally {
-      setLoading(false);
+      finishPlaceSearch(controller);
     }
   }
 
@@ -1233,12 +1257,14 @@ export default function PartyScreen({ session, onLeave }) {
       setAssistantReply(assistantReplyForIntent(intent));
       await speakAssistantText(assistantReplyForIntent(intent));
       setQuery(intent.query);
+      const controller = beginPlaceSearch();
       setLoading(true);
       try {
         const isNearbyFuel = isFuelSearch(intent.query) && searchLocation;
         const body = isNearbyFuel
-          ? await searchNearbyPois(searchLocation, ['fuel'], 5000)
-          : await searchPlaces(intent.query, visibleRegion, searchLocation);
+          ? await searchNearbyPois(searchLocation, ['fuel'], 5000, { signal: controller.signal })
+          : await searchPlaces(intent.query, visibleRegion, searchLocation, { signal: controller.signal });
+        if (!placeSearchControllerRef.current.isCurrent(controller)) return;
         const nextResults = body.results || [];
         setResults(nextResults);
         setShowSavedPlaces(true);
@@ -1249,10 +1275,11 @@ export default function PartyScreen({ session, onLeave }) {
         setAssistantReply(reply);
         await speakAssistantText(reply);
       } catch (error) {
+        if (!placeSearchControllerRef.current.isCurrent(controller) || error.name === 'AbortError') return;
         setAssistantReply(error.message);
         await speakAssistantText(error.message);
       } finally {
-        setLoading(false);
+        finishPlaceSearch(controller);
       }
       return;
     }
@@ -1301,14 +1328,24 @@ export default function PartyScreen({ session, onLeave }) {
     if (name === 'search_place') {
       if (!party.connectivity.capabilities.canSearch) throw new Error('Busca indisponível nesta rede.');
       const assistantQuery = String(args.query || '');
-      const body = isFuelSearch(assistantQuery) && searchLocation
-        ? await searchNearbyPois(searchLocation, ['fuel'], 5000)
-        : await searchPlaces(assistantQuery, visibleRegion, searchLocation);
+      const controller = beginPlaceSearch();
+      let body;
+      try {
+        body = isFuelSearch(assistantQuery) && searchLocation
+          ? await searchNearbyPois(searchLocation, ['fuel'], 5000, { signal: controller.signal })
+          : await searchPlaces(assistantQuery, visibleRegion, searchLocation, { signal: controller.signal });
+      } catch (error) {
+        finishPlaceSearch(controller);
+        if (controller.signal.aborted) return;
+        throw error;
+      }
+      if (!placeSearchControllerRef.current.isCurrent(controller)) return;
       const nextResults = body.results || [];
       setQuery(String(args.query || ''));
       setResults(nextResults);
       setShowSavedPlaces(true);
       result = { results: nextResults.slice(0, 3) };
+      finishPlaceSearch(controller);
     } else if (name === 'choose_place' || name === 'navigation_set_destination') {
       const index = Number.isInteger(Number(args.index)) ? Number(args.index) : 0;
       const option = results[index];
@@ -1520,11 +1557,15 @@ export default function PartyScreen({ session, onLeave }) {
       setMessage('O desvio já está sendo calculado. Aguarde a conclusão.');
       return false;
     }
+    cancelPlaceSearchRequest();
     detourCalculationRef.current = true;
     const stop = { ...point, lat: latitude, lng: longitude };
     searchInputRef.current?.blur();
     Keyboard.dismiss();
     setDetourSearchOpen(false);
+    setQuery('');
+    setResults([]);
+    setShowSavedPlaces(false);
     setLoading(true);
     setMessage(`Calculando parada em ${stop.name || stop.label || 'novo local'}â€¦`);
     try {
@@ -1874,9 +1915,13 @@ export default function PartyScreen({ session, onLeave }) {
         sequence: Date.now() % 0xffffffff
       });
       const result = await party.sendEmergencyPacket(packet, { message: 'SOS — preciso de ajuda', location: location.position });
-      setMessage(result?.relayed === false
-        ? 'SOS criptografado enviado localmente; aguardando confirmacao.'
-        : 'SOS criptografado enviado; aguardando confirmacao local.');
+      setMessage(result?.signalSent
+        ? 'Sinal SOS com as coordenadas enviado à party; aguardando confirmação.'
+        : result?.localSent
+          ? 'SOS enviado pelo transporte local; aguardando confirmação dos aparelhos próximos.'
+          : result?.relayAccepted
+            ? 'O servidor recebeu o pacote SOS criptografado, mas não confirmou a entrega aos participantes.'
+            : 'Não foi possível confirmar o envio do SOS. Tente novamente quando houver conexão.');
     } catch (error) {
       setMessage(error.message || 'Nao foi possivel preparar o SOS.');
     } finally {
@@ -2051,6 +2096,7 @@ export default function PartyScreen({ session, onLeave }) {
       {
         text: 'Procurar End. Desvio',
         onPress: () => {
+          cancelPlaceSearchRequest();
           setActiveKind('destination');
           setDetourSearchOpen(true);
           setQuery('');
@@ -2066,6 +2112,7 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   function cancelDetourSearch() {
+    cancelPlaceSearchRequest();
     searchInputRef.current?.blur();
     Keyboard.dismiss();
     setDetourSearchOpen(false);
@@ -2076,6 +2123,7 @@ export default function PartyScreen({ session, onLeave }) {
   }
 
   function cancelPlaceSearch() {
+    cancelPlaceSearchRequest();
     searchInputRef.current?.blur();
     Keyboard.dismiss();
     setDetourSearchOpen(false);
@@ -2446,7 +2494,7 @@ export default function PartyScreen({ session, onLeave }) {
           <TextInput
             ref={searchInputRef}
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(value) => { cancelPlaceSearchRequest(); setQuery(value); setResults([]); }}
             onFocus={() => setShowSavedPlaces(true)}
             onSubmitEditing={() => { Keyboard.dismiss(); search(); }}
             blurOnSubmit
@@ -2456,7 +2504,7 @@ export default function PartyScreen({ session, onLeave }) {
             returnKeyType="search"
             style={styles.floatingInput}
           />
-          {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={() => { setQuery(''); setResults([]); setShowSavedPlaces(true); }} style={styles.clearSearchButton}><Text style={styles.clearSearch}>{'\u00d7'}</Text></Pressable>}
+          {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Limpar busca" onPress={clearPlaceSearch} style={styles.clearSearchButton}><Text style={styles.clearSearch}>{'\u00d7'}</Text></Pressable>}
            <Pressable accessibilityRole="button" accessibilityLabel="Buscar lugares" accessibilityState={{ disabled: loading || !party.joined, busy: loading }} disabled={loading || !party.joined} onPress={search} style={(loading || !party.joined) && styles.disabled}><Text style={styles.floatingSearchButton}>{loading ? '…' : 'Buscar'}</Text></Pressable>
            {(detourSearchOpen || showSavedPlaces || query.trim() || results.length > 0) && <Pressable accessibilityRole="button" accessibilityLabel={detourSearchOpen ? 'Cancelar busca de desvio' : 'Cancelar busca de endereço'} onPress={detourSearchOpen ? cancelDetourSearch : cancelPlaceSearch} style={styles.cancelSearchButton}><Text style={styles.cancelSearchText}>Cancelar</Text></Pressable>}
         </View>
