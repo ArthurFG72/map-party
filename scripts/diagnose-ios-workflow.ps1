@@ -24,6 +24,16 @@ $headers = @{
 $base = "https://api.github.com/repos/$repository/actions/runs/$RunId"
 $run = Invoke-RestMethod -Uri $base -Headers $headers
 $jobs = Invoke-RestMethod -Uri "$base/jobs?per_page=100" -Headers $headers
+$logDirectory = Join-Path ([IO.Path]::GetTempPath()) "maps-ios-run-$RunId"
+if (Test-Path -LiteralPath $logDirectory) { Remove-Item -LiteralPath $logDirectory -Recurse -Force }
+New-Item -ItemType Directory -Path $logDirectory | Out-Null
+$logArchive = Join-Path $logDirectory 'logs.zip'
+try {
+    Invoke-WebRequest -Uri "$base/logs" -Headers $headers -OutFile $logArchive
+    Expand-Archive -LiteralPath $logArchive -DestinationPath $logDirectory -Force
+} catch {
+    Write-Output "Workflow logs unavailable: $($_.Exception.Message)"
+}
 
 Write-Output "Workflow: $($run.name)"
 Write-Output "Run: $($run.html_url)"
@@ -45,6 +55,21 @@ foreach ($job in $jobs.jobs) {
             }
         }
     }
+    foreach ($step in ($job.steps | Where-Object { $_.conclusion -eq 'failure' })) {
+        $stepLogs = Get-ChildItem -LiteralPath $logDirectory -Recurse -File -Filter '*.txt' |
+            Where-Object { $_.BaseName -match [regex]::Escape($step.name) }
+        foreach ($log in $stepLogs) {
+            $matches = Select-String -LiteralPath $log.FullName -Pattern '##\[error\]|\berror:|\bError:|\bfailed\b|NoMethodError|undefined method|fatal error|not found' |
+                Select-Object -Last 30
+            if ($matches) {
+                Write-Output "  Failure details from $($step.name):"
+                $matches | ForEach-Object { Write-Output "    $($_.Line.Trim())" }
+            } else {
+                Write-Output "  Tail of failed step $($step.name):"
+                Get-Content -LiteralPath $log.FullName -Tail 30 | ForEach-Object { Write-Output "    $($_.Trim())" }
+            }
+        }
+    }
 }
 
 if ($jobs.jobs.Count -eq 0 -or -not ($jobs.jobs | Where-Object { $_.runner_id -ne 0 })) {
@@ -57,4 +82,11 @@ if ($artifacts.artifacts.Count -eq 0) {
 } else {
     Write-Output 'Artifacts:'
     $artifacts.artifacts | ForEach-Object { Write-Output "  $($_.name) ($($_.size_in_bytes) bytes)" }
+}
+if (Test-Path -LiteralPath $logDirectory) {
+    $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $resolvedLogs = [IO.Path]::GetFullPath($logDirectory)
+    if ($resolvedLogs.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and $resolvedLogs -match "maps-ios-run-$RunId$") {
+        Remove-Item -LiteralPath $resolvedLogs -Recurse -Force
+    }
 }
